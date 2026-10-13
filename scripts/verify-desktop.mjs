@@ -332,7 +332,9 @@ async function main() {
     const observed = JSON.parse(result.result.value);
     assert.equal(observed.title, 'ASTRA');
     assert.match(observed.body, /Hi, Karl/);
-    assert.match(observed.body, /NO SAVED MEMORY/i);
+    // Memory now exists on disk (Intelligence V1); the footer must say so
+    // rather than claim the old session-only state.
+    assert.match(observed.body, /MEMORY IS ON DISK/i);
     assert.equal(observed.protocol, 'file:');
     assert.equal(observed.bridge, 'function');
     assert.equal(observed.info.name, 'ASTRA');

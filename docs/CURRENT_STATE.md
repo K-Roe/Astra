@@ -1,5 +1,55 @@
 # Current verified state
 
+## Intelligence V1 — persistent knowledge, approved research and coding tools (2026-10-13)
+
+Karl approved Intelligence V1 on 2026-10-13. Full architecture and operating
+detail is in `docs/INTELLIGENCE_V1.md`; this entry records what was actually
+executed and verified.
+
+**Preflight.** LW-02C had already been committed and pushed by Karl himself as
+`75cc3de "astra moving"`, so there was nothing uncommitted to checkpoint. The
+tree was clean and in sync with `origin/main`. `AGENTS.md` still said authority
+stopped after LW-02B-R1; that record has been updated to record the Intelligence
+V1 approval and the repository-root and website-content boundaries. **Nothing
+has been pushed by me.**
+
+**What was built.** A local SQLite knowledge and memory database using Node's
+bundled `node:sqlite` (no new dependency, no cloud); an SSRF-hardened
+approved-source crawler; a content extractor and chunker; FTS5 retrieval with
+real citations; retrieval-augmented answering wired into the existing Gemma
+chat; persistent memory with provenance and corrections; a Windows
+path-containment sandbox; repository discovery, file tools, structured patching
+and Git inspection; a controlled command runner; a four-level approval system
+with an audit log; a persistent coding-task state machine with restart recovery;
+model routing with an objective coding benchmark; and Learning, Projects and
+Coding workspaces in the renderer. The renderer gained no new privileges: the
+sandbox, CSP and `connect-src 'none'` are unchanged.
+
+**Defects found and fixed during this work** (all real, none cosmetic):
+- A **repository-escape bug**: file writes were validated against the workspace root rather than the repository, so `../escaped.js` from inside a project landed in the parent directory. Writes are now scoped per repository.
+- A **CSS class collision**: a new `.workspace-grid` rule overrode the app shell's own layout grid and collapsed the conversation panel. Caught by native desktop verification, not by a unit test.
+- **Link extraction never worked**: tags were flattened to spaces before anchors were parsed, so no links were ever found and no page could ever be followed.
+- **`robots.txt` was unreachable**: it was validated against the approved path prefix, which it necessarily lives outside of. Every crawl recorded `robots-unavailable`.
+- The IPv4 block table had a wrong base for `127.0.0.0/8`, so loopback was not blocked.
+- IPv6 NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) addresses were not recognised as tunnelled IPv4.
+- A corrupt database was copied to quarantine but never removed, so the retry failed against the same damaged file and the file handle leaked, locking it.
+- `npmrc` without a leading dot was treated as an ordinary file; lockfiles such as `package-lock.json` were treated as indexable.
+- An acceptance check briefly passed vacuously because an edit removed the call that populated its input; that was spotted and reverted to a real crawl.
+
+**Verification actually executed on 2026-10-13.** `npm run lint` clean. `npm test` passed **176/176**, of which 109 are new: database migrations, corruption recovery, backup, SSRF and redirect rejection, HTML extraction, robots, crawl limits, source revocation, retrieval, citation accuracy, offline retrieval, memory corrections, repository discovery, Windows path containment, symlink escape prevention, repository creation, repository editing, patch application, approval enforcement, command restrictions, Git diff generation, task cancellation, task recovery, prompt-injection resistance, model routing, benchmark reliability and grounding. `node scripts/acceptance-intelligence.mjs` passed **39/39** checks across scenarios A–F using the real services. `npm run verify:desktop` passed a full native Windows run with exit code 0, and both screenshots were inspected.
+
+**Live evidence, not just mocks.** Astra fetched `https://react.dev/learn` over the real network, extracted 14,301 characters from the index page, indexed 5 documents totalling 1.78 MB and 167 chunks, then answered a React question **from the retrieved text with a real citation**, and **refused** an out-of-scope question without fabricating a source. Evidence is in `test-results/intelligence/live-crawl.json` and `grounded-chat.json`.
+
+**Coding model benchmark, measured not assumed.** `qwen2.5-coder:7b` scored **0.83 (5/6)** on short single-shot tasks: TypeScript correctness, code generation, bug fixing, structured tool calls and multi-file reasoning passed; **test interpretation failed** — asked why a test expected 4 but received 5, it restated the symptom instead of naming a cause. This is competence on small, well-specified prompts. It is **not** evidence of reliable unattended multi-step development, and the benchmark records that caveat in its own output. Delegated work therefore stays bounded: every change needs approval, every edit is verified by running tests, and nothing is committed or pushed without separate approval. Conversation stays on `gemma3:4b`.
+
+**Performance.** With the intelligence service active: 30 fps idle and 30 fps during generation, 392 MiB Electron working set, first reply 7,653 ms. Unchanged from the pre-Intelligence baseline.
+
+**Limits.** Retrieval is FTS5 keyword matching only; there are no embeddings, so a paraphrase may miss. There is no repository scaffolding command because dependency installation is blocked. The Coding workspace exposes task creation, cancellation, resume and approval, but does not yet drive the whole edit→test→diff loop from the UI — Scenario D performs that loop through the service layer, and it passes. `node:sqlite` is marked experimental by Node. The benchmark is six cases, enough to detect a broken model and not enough to certify a good one. Nothing is committed or pushed.
+
+**Exact next recommended task:** Karl reviews the Learning workspace screenshot and the grounded chat transcript, then decides whether to add local embeddings behind a flag (benchmarked against FTS5 rather than assumed) or to wire the Coding workspace to the full task loop.
+
+## LW-02C Rigged character in the application — historical state (2026-10-13; superseded by Intelligence V1 above)
+
 ## LW-02C Rigged character in the application — current state (2026-10-13)
 
 **Authority note.** `AGENTS.md` still records authority as stopping after LW-02B-R1 and says not to begin LW-02C automatically. This block was carried out on Karl's direct instruction to continue past the LW-02B-R1 approval checkpoint (`806c1cf`, "LW-02B-R1 Astra character V1 design, approved by Karl"). That instruction has not yet been written back into `AGENTS.md`; until it is, the authority record and the work below disagree. Nothing was pushed.

@@ -126,3 +126,44 @@ h1 { margin: 0; font-size: 1.52rem; font-weight: 800; letter-spacing: .23em; lin
   .world-controls { right: 8px; bottom: 8px; gap: 4px; }
   .world-pause, .world-action { padding: 5px 7px; font-size: .6rem; }
 }
+
+/* ---------------------------------------------------- Intelligence workspaces */
+.workspace-tabs { display: flex; gap: 4px; padding: 0 16px 10px; }
+.workspace-tabs button { padding: 5px 11px; border: 1px solid #6b4d8f; border-radius: 999px; color: #d8c4ee; background: #20172c; font-size: .68rem; font-weight: 700; cursor: pointer; }
+.workspace-tabs button:hover { background: #2c1f3d; }
+.workspace-tabs button.active { background: #6b4d8f; color: #fff; border-color: #a77fe0; }
+.workspace { display: flex; flex-direction: column; gap: 12px; padding: 4px 16px 18px; min-height: 0; overflow-y: auto; }
+.workspace-head h2 { margin: 0 0 2px; font-size: .95rem; }
+.workspace-sub { margin: 0; color: #a992c4; font-size: .68rem; }
+/* Note: deliberately NOT `.workspace-grid` — that class belongs to the app
+   shell layout in App.tsx and reusing it here collapsed the main layout. */
+.workspace-cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.workspace-card { display: flex; flex-direction: column; gap: 9px; padding: 12px; border: 1px solid #3a2b4d; border-radius: 10px; background: #191226; }
+.workspace-card h3 { margin: 0; font-size: .76rem; letter-spacing: .04em; text-transform: uppercase; color: #c9a8ff; }
+.workspace .stack { display: flex; flex-direction: column; gap: 7px; }
+.workspace label { display: flex; flex-direction: column; gap: 3px; font-size: .66rem; color: #a992c4; }
+.workspace input, .workspace textarea { padding: 6px 8px; border: 1px solid #4a3760; border-radius: 7px; background: #120c1c; color: #f4ecff; font: inherit; font-size: .74rem; }
+.workspace button { padding: 6px 11px; border: 1px solid #6b4d8f; border-radius: 7px; color: #f4ecff; background: #2a1d3a; font-size: .7rem; font-weight: 700; cursor: pointer; }
+.workspace button:hover:not(:disabled) { background: #3a2750; }
+.workspace button:disabled { opacity: .45; cursor: not-allowed; }
+.workspace button.danger { border-color: #8a3b52; color: #ffd9e2; }
+.workspace button.danger:hover:not(:disabled) { background: #4a1f2c; }
+.source-list { display: flex; flex-direction: column; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.source-list li { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 7px 8px; border: 1px solid #33264a; border-radius: 8px; background: #150e21; }
+.source-list li > div:first-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.badge { font-size: .6rem; color: #9f86c2; }
+.muted { color: #8e77ab; font-size: .64rem; overflow-wrap: anywhere; }
+.error-text { color: #ff9fb0; font-size: .64rem; }
+.passage-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding-left: 16px; }
+.passage-list li p { margin: 0 0 3px; font-size: .7rem; line-height: 1.45; color: #e4d7f5; }
+.passage-list li a { color: #c9a8ff; font-size: .66rem; }
+.audit-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: .66rem; }
+.audit-list li { display: flex; gap: 6px; align-items: baseline; }
+.detail-list { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0; font-size: .68rem; }
+.detail-list dt { color: #9f86c2; }
+.detail-list dd { margin: 0; overflow-wrap: anywhere; }
+.workspace-status { margin: 0; padding: 7px 9px; border-radius: 7px; font-size: .68rem; }
+.workspace-status.ok { background: #16301f; color: #b6f0c6; }
+.workspace-status.error { background: #331520; color: #ffc2ce; }
+.workspace-status.busy { background: #1f1836; color: #d6c4f5; }

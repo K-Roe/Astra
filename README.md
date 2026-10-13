@@ -1,12 +1,33 @@
 # ASTRA
 
-A standalone, local-first Windows AI companion in development. LW-02B-R1 refines the full-body 3D character into a polished, expressive cartoon companion — a 1.70 m stylised young-adult woman with a sculpted face (real eye sockets, seated eyes, integrated lips), a loose violet updo with a side-swept fringe, a purple hoodie with a golden star, dark trousers and lavender trainers — rendered as a **design awaiting Karl's visual approval**. The application still shows the labelled procedural mannequin beside current-session conversation with the locally installed Gemma 3 4B model. No production rig, GLB integration, voice, persistent memory, cloud services or computer control is implemented.
+A standalone, local-first Windows AI companion. Astra runs a **rigged 3D character** in a room, **learns from documentation sites Karl approves**, **remembers things including corrections**, answers **with real citations** and admits when it does not know, and can **inspect and edit repositories** under `C:\Users\karlr\repos` through approval-gated, audited tools.
+
+Everything runs locally with Ollama. There is no cloud dependency and no paid API.
+
+## What it actually does
+
+- **Lives with a real character.** Astra Character V1 is a 56-bone rig, 19,812 triangles, 11 facial morph targets and 15 animation clips, loaded from a local GLB. She walks between waypoints, sits on furniture, waves, blinks and reacts to chat. An idle scheduler keeps her gently active and can be switched off.
+- **Learns from approved sources only.** Karl approves an HTTPS documentation URL; Astra fetches permitted pages, respects `robots.txt`, extracts readable text, stores it, and later answers from it with citations back to the real URLs.
+- **Says when it does not know.** If nothing is stored, Astra says so instead of inventing an answer or a citation.
+- **Remembers deliberately.** Memory is explicit and inspectable, with provenance and corrections. Ordinary conversation is never silently promoted to memory, and nothing scraped from the web can become a memory.
+- **Works as a coding assistant.** Discovers repositories, reads and searches code, applies structured patches, shows real Git diffs and runs allowlisted commands. Every privileged action sits behind an explicit, scoped, recorded approval.
+
+## Hard boundaries
+
+- The renderer is sandboxed: no Node, no filesystem, no network. All privileged work happens in the Electron main process behind a typed IPC bridge.
+- Only HTTPS sources Karl approved can be fetched, with SSRF, DNS-rebinding, redirect and robots defences.
+- Repository work is confined to `C:\Users\karlr\repos`, and **edits are confined to the specific repository**, never a sibling project.
+- **Website content and model output are data, never authority.** They cannot grant permission, trigger a command or edit a file.
+- Astra never commits, pushes, installs dependencies or deletes files without separate, explicit approval.
+- A coding task interrupted by a restart is recovered for review but **never resumes on its own**.
+- Knowledge retrieval and memory work fully offline once indexed.
 
 ## Requirements
 
 - Windows desktop session
 - Node.js and npm (verified here with Node 24.12.0 and npm 11.16.0)
 - Existing Ollama installation with `gemma3:4b` resolving to digest `c30276f7dffec93a536d283e15088990454b8d21cf180a3d6eea4959e4147291`
+- Optionally `qwen2.5-coder:7b` for bounded coding assistance
 
 ## Run
 
@@ -17,7 +38,15 @@ npm run dev
 
 `dev` builds the TypeScript main/preload code and Vite renderer, then opens Electron. It does not run a hot-reload server; rebuild and relaunch after edits. Dependencies require a network connection for the initial install. The app loads local files; Electron main contacts only Ollama at `127.0.0.1:11434`. Start Ollama before chatting. The renderer has no direct network or filesystem access.
 
-Messages remain only in process memory for the running session. Use **Clear conversation** to reset it. Closing Astra clears the session; Astra cannot remember it on the next launch. If Ollama is unavailable or the approved model identity differs, the app shows an error and does not substitute another model.
+Conversation history stays in process memory for the running session; use **Clear conversation** to reset it. **Knowledge, memory, approvals and coding tasks persist on disk** in `%LOCALAPPDATA%\Astra\astra-intelligence.db`, which starts empty. If Ollama is unavailable or the approved model identity differs, the app shows an error and does not substitute another model.
+
+## Workspaces
+
+The conversation panel has four tabs: **Chat**, **Learning** (approve sources, search stored knowledge with citations, manage memory), **Projects** (repositories under the approved root) and **Coding** (tasks, approvals, audit trail).
+
+## Coding model honesty
+
+`qwen2.5-coder:7b` measured **0.83 (5/6)** on a short, objective benchmark — enough for small well-specified tasks, and **not** enough to claim reliable unattended software development. The result, including the case it failed, is written to `test-results/intelligence/coding-model-benchmark.json`. Coding work therefore stays bounded: approved scope, verified by running tests, and never committed or pushed without separate approval. Conversation always stays on Gemma 3 4B.
 
 ## Checks
 
@@ -30,7 +59,18 @@ npm run verify:desktop
 npm run measure:world
 ```
 
-`npm test` builds first, then runs foundation, chat-service, message-formatting and 3D camera/performance-summary tests. `verify:desktop` requires a completed build, an interactive Windows session, Ollama, and the approved model already installed. It opens the native Electron window, checks 3D rendering, idle frames, manual/minimized pause and resize, sends a synthetic four-turn Gemma conversation, checks session context, no-persistent-memory behavior, scroll following, reset and bridge isolation, then closes the window and checks that Electron exits. It saves ignored screenshots at `test-results/astra-lw01-desktop.png` and `test-results/astra-lw01-compact.png` and resource samples at `test-results/astra-lw01-performance.json`. These are brief samples; whole-GPU readings do not isolate viewport consumption. The verifier uses a loopback Chrome DevTools port only for that test run; the normal `dev` launch does not enable remote debugging. `verify:desktop --allow-occluded` additionally runs when this session's foreground window prevents Chromium from reporting the app as visible; the run then records the visibility method it used. A disconnected-network acceptance test has not yet been run.
+`npm test` builds first, then runs **176 tests** covering the database and migrations, corruption recovery, SSRF and redirect rejection, HTML extraction, robots and crawl limits, retrieval and citation accuracy, offline retrieval, memory corrections and deletion, Windows path containment, symlink escape prevention, repository creation and editing, patch application, approval enforcement, command restrictions, Git diffs, task cancellation and recovery, prompt-injection resistance, model routing and grounding. `verify:desktop` requires a completed build, an interactive Windows session, Ollama and the approved model installed. It opens the native Electron window, checks 3D rendering and the rigged character loading and walking, idle frames, manual/minimized pause and resize, sends a synthetic four-turn Gemma conversation, checks scroll following, reset, layouts and bridge isolation, then closes the window and checks that Electron exits. It saves ignored screenshots at `test-results/astra-lw01-desktop.png` and `test-results/astra-lw01-compact.png` and resource samples at `test-results/astra-lw01-performance.json`. These are brief samples; whole-GPU readings do not isolate viewport consumption. The verifier uses a loopback Chrome DevTools port only for that test run; the normal `dev` launch does not enable remote debugging. `verify:desktop --allow-occluded` additionally runs when this session's foreground window prevents Chromium from reporting the app as visible.
+
+`node scripts/acceptance-intelligence.mjs` runs the A–F acceptance scenarios against the real services, using throwaway repositories in a temporary directory and **never Karl's real projects**. `node scripts/benchmark-coding-model.mjs` measures the local coding model. `node scripts/live-crawl-test.mjs` performs a real internet crawl and records the retrieval result.
+
+## Documentation
+
+- `docs/INTELLIGENCE_V1.md` — architecture and operating manual (start here)
+- `docs/CURRENT_STATE.md` — what is verified right now
+- `docs/HANDOVER.md` — how to continue safely
+- `docs/CHECKLIST.md` — items with their acceptance checks
+- `docs/DECISIONS.md` — decision records
+- `docs/LW02B_R1_CHARACTER_SPEC.md` — character design specification
 
 `measure:world` records per-state frame intervals, renderer CPU time, draw calls and system resource samples while Gemma is idle, generating and finished, plus compact resize, minimize/restore, manual pause, reduced-motion and the WebGL fallback. Output is ignored under `test-results/lw02a/`. Add `--baseline` to capture the older 12 fps cap for comparison and `--allow-occluded` in the same situation as above.
 
@@ -56,13 +96,14 @@ Committed review images live in `docs/review/lw02a/`, `docs/review/lw02b/` and `
 
 ## Layout and continuity
 
-- `src/main/`: Electron window, permission denial, narrow IPC handler, and local Ollama chat service.
-- `src/preload/`: bundled, sandbox-compatible context bridge.
-- `src/renderer/`: React Living Companion UI, isolated procedural Three.js viewport and restrictive CSP.
-- `src/shared/`: typed bridge contract, safe message-block parser, 3D camera framing and frame-performance summary helpers.
-- `tests/` and `scripts/`: foundation, chat-service, formatting, camera/performance and Windows layout/launch, scene-measurement, and Blender character-design scripts.
-- `docs/`: plan, decisions, verified state and handover.
+- `src/main/`: Electron window, permission denial, IPC handlers, Ollama chat service, and the intelligence services (knowledge/memory/task stores, approved-source reader, repository tools, approvals, command runner).
+- `src/preload/`: bundled, sandbox-compatible context bridges for chat and intelligence.
+- `src/renderer/`: React Living Companion UI, the Three.js viewport, the Learning/Projects/Coding workspaces and a restrictive CSP.
+- `src/shared/`: typed bridge contracts, safe message-block parser, character navigation/idle/state logic, 3D camera framing and frame-performance summary helpers.
+- `src/assets/`: the local character GLB and its editable Blender source.
+- `tests/` and `scripts/`: unit and acceptance tests, Windows layout/launch verification, the coding benchmark, live-crawl test and Blender character scripts.
+- `docs/`: plan, decisions, verified state, handover and `INTELLIGENCE_V1.md`.
 
 Read `AGENTS.md` and the continuity documents before changing the project. Models, personal memory, backups and secrets must stay outside the tracked source tree. No existing assistant history is seeded into Astra.
 
-The 3D mannequin is code-native and clearly labelled as temporary. The viewport paces itself at up to 30 rendered frames per second, has a **Pause scene** control and stops when hidden, minimized, offscreen or under reduced-motion preference. `docs/LIVING_COMPANION_PLAN.md` records later character, animation, offline speech and lip-sync stages; these require separate approval. Microphone and audio controls are visibly unavailable.
+The 3D character is loaded from a local GLB and paced at up to 30 rendered frames per second. The viewport has a **Pause scene** control and stops when hidden, minimized, offscreen or under reduced-motion preference. A **Idle activities** toggle stops her moving. If the character asset cannot load, a clearly labelled procedural mannequin is used as a fallback so chat stays usable. The procedural mannequin remains the fallback; the rigged GLB is the shipped appearance. preference. `docs/LIVING_COMPANION_PLAN.md` records later character, animation, offline speech and lip-sync stages; these require separate approval. Microphone and audio controls are visibly unavailable.

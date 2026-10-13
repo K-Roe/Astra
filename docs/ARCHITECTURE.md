@@ -38,6 +38,24 @@ LW-02A refines these **unimplemented** boundaries: the local conversation engine
 - **Approved-website research:** A future optional main-process service requires Karl's explicit approval for each domain/scope and must remain disabled by default. Allowlist canonical HTTPS domains and read-only methods; reject arbitrary URLs, credentials in URLs, nonapproved ports, private/loopback/link-local/metadata addresses and local files. Resolve DNS before connecting and after redirects, revalidate every redirect target and address, and prevent rebinding or proxy bypass. Treat pages as untrusted data: no page text can issue tool instructions, change permissions or become a system prompt. Bound redirects, response bytes, content types, request count, time, rate and total session budget; expose source/consent and local cache/retention controls. These are design requirements, not a web capability today.
 - **Learning evaluation:** Define measurable task suites for recall accuracy, correction fidelity, conversation quality and coding reliability before adaptation. Separate persistent knowledge retrieval and approved behavioral rule changes from neural-network fine-tuning. Fine-tuning needs separately approved data rights, compute budget, held-out evaluation and rollback.
 
+## Intelligence V1 architecture (implemented, 2026-10-13)
+
+`docs/INTELLIGENCE_V1.md` is the full manual. In summary, the renderer gained **no** new privileges: it remains sandboxed, keeps `contextIsolation: true`, `nodeIntegration: false`, `webSecurity: true` and a CSP with `connect-src 'none'`, so it cannot reach the network. It gained a second typed bridge, `astraIntelligence`, with 26 channels, all validated against the primary frame.
+
+```
+renderer workspaces ─▶ preload ─▶ IntelligenceService ─▶ KnowledgeStore / MemoryStore
+                                             ├──────────▶ ApprovalManager / TaskStore
+                                             ├──────────▶ reader.ts   (only internet access)
+                                             ├──────────▶ pathGuard   (only repo path resolution)
+                                             └──────────▶ commandRunner (only process spawn)
+```
+
+`Intelli`IntelligenceService` composes them. The database is `astra-intelligence.db` in Electron's user-data directory, outside Git. The renderer sends **names** (source id, project root, task id), never a path it wants acted upon and never a shell string. Privileged entry points re-validate at the moment of use: `ApprovalManager.assertApproved(action, scope)` runs immediately before each operation, with scope treated as a ceiling so one approval cannot authorise a different file or repository.
+
+Three modules are the only places with a given power, and each is independently testable: `research/reader.ts` is the only code that opens a network connection, `workspace/pathGuard.ts` the only code that resolves a repository path, and `workspace/commandRunner.ts` the only code that spawns a process. The command runner uses no shell, allowlists both executables and package scripts, always refuses `npm install`, and kills the process tree on timeout. Retrieved web content is data: `MemoryStore.remember` throws for web-origin statements and passages are fenced and labelled as untrusted before the payload reaches the model.
+
+On startup every unfinished coding task is marked as needing confirmation, so a restart restores context but never resumes executable work. Model routing refuses to delegate coding work until a benchmark measures reliability at or above 0.6; conversation always stays on Gemma `gemma3:4b`.
+
 ## Memory and portability
 
 The initial personal-memory store is empty. Personality text is versioned application configuration; it is not seeded biography or conversation history. Conversation persistence and personal memory must be explicit, inspectable concepts, with correction and deletion paths in M2. Use SQLite schema versioning and integrity checks. Store the live database, backups, and any user-content logs outside Git; proposed per-user location is `%LOCALAPPDATA%\Astra`, subject to M2 validation. An export must be restorable into a separate profile without replacing the source. Define conflict handling, encryption and user-visible backup location before M2 implementation. Never delete or overwrite a profile as a repair shortcut.

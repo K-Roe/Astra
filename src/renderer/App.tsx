@@ -3,7 +3,18 @@ import type { AppInfo, ChatMessage, ChatStatus } from '../shared/contracts';
 import type { CharacterEvent, CharacterSignal } from '../shared/characterStateMachine';
 import { AvatarPanel } from './AvatarPanel';
 import { MessageContent } from './MessageContent';
+import { CodingWorkspace, ProjectsWorkspace } from './workspaces/Workspaces';
+import { LearningWorkspace } from './workspaces/LearningWorkspace';
 import { presentationForChatPhase, type ChatPhase } from './presentationState';
+
+type WorkspaceId = 'conversation' | 'learning' | 'projects' | 'coding';
+
+const WORKSPACES: readonly { readonly id: WorkspaceId; readonly label: string }[] = [
+  { id: 'conversation', label: 'Chat' },
+  { id: 'learning', label: 'Learning' },
+  { id: 'projects', label: 'Projects' },
+  { id: 'coding', label: 'Coding' },
+];
 
 export function App() {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
@@ -14,6 +25,7 @@ export function App() {
   const [detail, setDetail] = useState('Checking the local model…');
   const [scrolledUp, setScrolledUp] = useState(false);
   const [idleEnabled, setIdleEnabled] = useState(true);
+  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceId>('conversation');
   const [characterSignal, setCharacterSignal] = useState<CharacterSignal>({ event: 'chat_interrupted', nonce: 0 });
   const requestId = useRef(0);
   const conversationRef = useRef<HTMLDivElement>(null);
@@ -181,6 +193,22 @@ export function App() {
               <div className={`status status-${phase}`} role="status" aria-live="polite"><span className="status-dot" aria-hidden="true" />{statusLabel}</div>
             </header>
 
+            <nav className="workspace-tabs" aria-label="Astra workspaces">
+              {WORKSPACES.map((entry) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  className={activeWorkspace === entry.id ? 'active' : ''}
+                  aria-pressed={activeWorkspace === entry.id}
+                  onClick={() => setActiveWorkspace(entry.id)}
+                >
+                  {entry.label}
+                </button>
+              ))}
+            </nav>
+
+            {activeWorkspace === 'conversation' ? (
+              <>
             <div className="conversation-wrap">
               <div className="conversation" ref={conversationRef} onScroll={onConversationScroll} aria-label="Conversation" aria-live="polite">
                 {messages.length === 0 && !pending && <div className="welcome"><span className="welcome-symbol" aria-hidden="true">✦</span><h3>Hi, Karl.</h3><p>I'm here and ready to talk. What's on your mind?</p><small>This conversation stays in this session. I don't have personal memory yet.</small></div>}
@@ -194,8 +222,14 @@ export function App() {
             <div className="conversation-bottom">
               <div className="status-line" data-phase={phase}><p role="status">{detail}</p><div className="actions">{phase === 'error' && <button type="button" className="text-button" onClick={() => void refresh()}>Retry connection</button>}<button type="button" className="text-button" onClick={() => void clearConversation()} disabled={messages.length === 0 && !pending}>Clear conversation</button></div></div>
               <form className="composer" onSubmit={(event) => void send(event)}><label htmlFor="message-input" className="sr-only">Message Astra</label><textarea id="message-input" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleKeyDown} placeholder="Message Astra…" rows={2} maxLength={8000} disabled={phase === 'connecting' || phase === 'generating'} /><button type="submit" className="send-button" disabled={!draft.trim() || phase === 'connecting' || phase === 'generating'}>Send <span aria-hidden="true">↗</span></button></form>
-              <div className="conversation-footer"><div className="voice-reserved" aria-label="Future voice controls"><button type="button" disabled aria-label="Microphone unavailable">Mic unavailable</button><button type="button" disabled aria-label="Audio unavailable">Audio unavailable</button></div><span>LOCAL CHAT · NO SAVED MEMORY</span></div>
+              <div className="conversation-footer"><div className="voice-reserved" aria-label="Future voice controls"><button type="button" disabled aria-label="Microphone unavailable">Mic unavailable</button><button type="button" disabled aria-label="Audio unavailable">Audio unavailable</button></div><span>LOCAL CHAT · MEMORY IS ON DISK</span></div>
             </div>
+              </>
+            ) : null}
+
+            {activeWorkspace === 'learning' ? <LearningWorkspace /> : null}
+            {activeWorkspace === 'projects' ? <ProjectsWorkspace /> : null}
+            {activeWorkspace === 'coding' ? <CodingWorkspace /> : null}
           </section>
         </div>
       </section>

@@ -6,6 +6,17 @@ Build a standalone Windows AI companion named Astra with a predefined personalit
 
 Approved stack: Electron, React + TypeScript, Node.js + TypeScript, Ollama, SQLite, Windows first. Vue is prohibited. Paid APIs and subscriptions require Karl's prior approval. Target hardware is Ryzen 5 5500, RTX 3050 8 GB VRAM, 16 GB RAM, NVMe SSD. Candidate models are a quantized Qwen2.5-Coder 7B and a smaller general-purpose model; selection requires a measured benchmark.
 
+## Intelligence V1 and the M2/M3/M5 overlap
+
+Karl approved **Intelligence V1** on 2026-10-13. It deliberately lands on top of several planned milestones at once, so the roadmap should be read as merged rather than sequential:
+
+- **M2 Memory** is substantially delivered: persistent SQLite memory with provenance, explicit corrections, forget and purge, a fresh profile that starts empty, and inspectable controls in the Learning workspace. Still outstanding: export/restore into a separate profile, and encryption of the database at rest.
+- **M3 Coding and tools** is substantially delivered: repository discovery, scoped read/write/patch, Git status, diff and branch creation, a controlled command runner, deny-by-default approvals with scope binding, an audit trail, and prompt-injection tests. Still outstanding: a UI that drives the full edit→test→diff loop, and any decision about permitting dependency installation.
+- **M5 Learning** is partially delivered: the *journal* and *evaluation* ideas are implemented as a local knowledge base with FTS5 retrieval, and evaluation exists as the coding benchmark. **Fine-tuning remains research and is not authorized.**
+- **M1 offline acceptance** is still formally open; retrieval-based knowledge works offline, but the original disconnected-network chat acceptance has not been re-run since the model and application changed.
+
+Architecture and evidence: `docs/INTELLIGENCE_V1.md`, `docs/CURRENT_STATE.md`, `docs/CHECKLIST.md`.
+
 ## Scope by milestone
 
 | Milestone | Intended result | Completion evidence |
@@ -27,7 +38,7 @@ M0 can be marked complete only when all eight documents exist and agree, the Ele
 
 ## Authorization and remaining scope
 
-No models, model downloads, memory database, voice stack, computer control, cloud integrations, paid services, or M1 work were included in M0. Karl subsequently approved M1 discovery/benchmarking, then approved the existing Gemma digest for M1 Phase 3 basic-chat integration on 2026-10-13. That approval does not extend to model downloads, persistent memory, voice, tools, cloud services or further M1 expansion. Full M1 acceptance still requires disconnected-network conversation and remaining checklist evidence.
+No models, model downloads, memory database, voice stack, computer control, cloud integrations, paid services, or M1 work were included in M0. Karl subsequently approved M1 discovery/benchmarking, then approved the existing Gemma digest for M1 Phase 3 basic-chat integration on 2026-10-13, then approved LW-02C (rig, GLB and application integration), which Karl then committed and pushed himself as `75cc3de`, and finally approved **Intelligence V1** on 2026-10-13. That last approval covers persistent knowledge and memory, approved-website learning with SSRF defences, repository work confined to `C:\Users\karlr\repos`, controlled command execution, a multi-level approval system and audit logging. It does **not** extend to model downloads or changes, credential access, disabling security protections, actions outside the approved root, cloud services, voice, microphone or fine-tuning. Full M1 acceptance still requires disconnected-network conversation and remaining checklist evidence.
 
 Karl separately approved V0.2 Phase 01 Living Companion UI structure and avatar preparation on 2026-10-13. This keeps the working Gemma chat and security boundary while adding only a temporary, clearly labelled character placeholder and responsive conversation layout. The later artwork, animation and voice sequence is in `LIVING_COMPANION_PLAN.md`; that plan is not implementation authority for future stages.
 

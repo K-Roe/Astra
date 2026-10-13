@@ -1,4 +1,10 @@
 import type { ChatMessage, ChatStatus } from '../shared/contracts';
+import {
+  extractUsedCitations,
+  groundingInstruction,
+  referenceBlock,
+  type GroundingContext,
+} from './knowledge/grounding';
 
 export const MODEL_NAME = 'gemma3:4b';
 export const MODEL_DIGEST = 'c30276f7dffec93a536d283e15088990454b8d21cf180a3d6eea4959e4147291';
@@ -35,6 +41,8 @@ export class ChatService {
   constructor(
     private readonly personality: string,
     private readonly request: typeof fetch = fetch,
+    /** Optional retrieval hook; absent means a plain, unsourced conversation. */
+    private readonly grounder?: (query: string) => GroundingContext,
   ) {}
 
   private async post<T>(route: string, body: object, signal: AbortSignal): Promise<T> {
@@ -102,8 +110,25 @@ export class ChatService {
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(120000)]);
     try {
       await this.verifyModel(signal);
+      // Retrieval happens before generation so the answer can be grounded in
+      // stored sources, and so a question with no stored answer can say so.
+      const grounding = this.grounder
+        ? this.grounder(text)
+        : { passages: [], memories: [], hasKnowledge: false, stalePassages: 0 };
+      const reference = referenceBlock(grounding);
+      const guidance = groundingInstruction(grounding);
+
+      const systemPrompt = [
+        `You are Astra, a local-first desktop companion. Follow this authored personality specification:\n\n${this.personality}`,
+        reference === 'NO_REFERENCE_MATERIAL'
+          ? 'You have no stored reference material for this question.'
+          : `Reference material follows.\n\n${reference}`,
+        guidance,
+        'You cannot take actions, run commands, or access files in this build. Never claim that you did.',
+      ].join('\n\n');
+
       const messages = [
-        { role: 'system', content: `You are Astra. This desktop build supports only conversation in the current running session. You have no persistent personal memory, access to previous sessions, email, files, computer tools, or voice. Do not claim to remember Karl across application restarts or to have performed actions. Follow this authored personality specification:\n\n${this.personality}` },
+        { role: 'system', content: systemPrompt },
         ...this.history,
         { role: 'user', content: text },
       ];
@@ -119,10 +144,18 @@ export class ChatService {
         throw new Error('The approved Gemma model digest is unavailable or no longer the default. Chat is paused.');
       }
       if (requestGeneration !== this.generation) throw new Error('Conversation was cleared.');
-      const answer = result.message?.content?.trim();
-      if (result.message?.role !== 'assistant' || !answer) throw new Error('The local model returned an empty response.');
+      const raw = result.message?.content?.trim();
+      if (result.message?.role !== 'assistant' || !raw) throw new Error('The local model returned an empty response.');
+
+      // Citations are appended from real stored sources only, and only the
+      // markers the model actually used are kept.
+      const answer = grounding.hasKnowledge && /\[\d+\]/.test(raw)
+        ? `${raw}\n\nSources:\n${extractUsedCitations(raw, grounding).join('\n')}`
+        : raw;
       this.history.push({ role: 'user', content: text }, { role: 'assistant', content: answer });
-      this.detail = 'Local model ready. Conversation stays in this running session.';
+      this.detail = grounding.hasKnowledge
+        ? `Answered from ${grounding.passages.length} stored source passage(s).`
+        : 'Local model ready. Nothing in the knowledge base matched, so this reply is not sourced.';
       return this.snapshot('ready');
     } catch (error) {
       this.detail = this.describe(error);
