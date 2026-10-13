@@ -102,7 +102,33 @@ function focusWindow(handle) {
 
 async function worldSnapshot(page) {
   const result = await page.send('Runtime.evaluate', {
-    expression: "JSON.stringify((()=>{const v=document.querySelector('.world-viewport');const c=v?.querySelector('canvas');return {state:v?.dataset.worldState,frames:Number(v?.dataset.frameCount),fps:Number(v?.dataset.fps),canvasWidth:c?.width,canvasHeight:c?.height,hidden:document.hidden,chatPhase:document.querySelector('.status')?.innerText,placeholder:document.querySelector('.placeholder-label')?.innerText}})())",
+    expression: "JSON.stringify((()=>{const v=document.querySelector('.world-viewport');const c=v?.querySelector('canvas');const d=v?.astraDiagnostics;return {state:v?.dataset.worldState,frames:Number(v?.dataset.frameCount),fps:Number(v?.dataset.fps),canvasWidth:c?.width,canvasHeight:c?.height,hidden:document.hidden,chatPhase:document.querySelector('.status')?.innerText,placeholder:document.querySelector('.placeholder-label')?.innerText,characterAsset:v?.dataset.characterAsset,characterError:v?.dataset.characterError,characterState:d?.state,characterClip:d?.clip,characterX:d?.x,characterZ:d?.z,idleToggle:!!document.querySelector('.idle-toggle input')}})())",
+    returnByValue: true,
+  });
+  return JSON.parse(result.result.value);
+}
+
+/**
+ * Waits for the rigged GLB, then confirms she actually leaves the spot she
+ * started on. A character that loads but never moves is not integrated.
+ */
+async function verifyCharacterMovement(page) {
+  const deadline = Date.now() + 60000;
+  const start = await characterProbe(page);
+  assert.equal(start.asset, 'ready', `rigged character failed to load (${start.error ?? 'unknown'})`);
+  let moved = false;
+  while (Date.now() < deadline && !moved) {
+    await delay(1000);
+    const current = await characterProbe(page);
+    if (current.x !== start.x || current.z !== start.z) moved = true;
+  }
+  assert.equal(moved, true, 'character never navigated away from its starting waypoint');
+  return { start, moved };
+}
+
+async function characterProbe(page) {
+  const result = await page.send('Runtime.evaluate', {
+    expression: "(()=>{const v=document.querySelector('.world-viewport');const d=v?.astraDiagnostics;return JSON.stringify({asset:v?.dataset.characterAsset,error:v?.dataset.characterError,state:d?.state,clip:d?.clip,x:d?.x,z:d?.z})})()",
     returnByValue: true,
   });
   return JSON.parse(result.result.value);
@@ -218,7 +244,7 @@ async function waitForAssistantCount(page, expected, timeoutMs = 120000) {
 
 async function inspectLayout(page, compact) {
   const result = await page.send('Runtime.evaluate', {
-    expression: "JSON.stringify({width:innerWidth,height:innerHeight,documentWidth:document.documentElement.scrollWidth,avatar:(()=>{const r=document.querySelector('.avatar-panel').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})(),chat:(()=>{const r=document.querySelector('.conversation-panel').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})(),composer:(()=>{const r=document.querySelector('.composer').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})(),placeholder:document.querySelector('.placeholder-label')?.innerText,voice:Array.from(document.querySelectorAll('.voice-reserved button')).map(b=>({text:b.innerText,disabled:b.disabled,bottom:b.getBoundingClientRect().bottom})),presentation:document.querySelector('.avatar-panel')?.dataset.presentationState})",
+    expression: "JSON.stringify({width:innerWidth,height:innerHeight,documentWidth:document.documentElement.scrollWidth,avatar:(()=>{const r=document.querySelector('.avatar-panel').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})(),chat:(()=>{const r=document.querySelector('.conversation-panel').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})(),composer:(()=>{const r=document.querySelector('.composer').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})(),placeholder:document.querySelector('.placeholder-label')?.innerText,idleToggle:!!document.querySelector('.idle-toggle input'),voice:Array.from(document.querySelectorAll('.voice-reserved button')).map(b=>({text:b.innerText,disabled:b.disabled,bottom:b.getBoundingClientRect().bottom})),presentation:document.querySelector('.avatar-panel')?.dataset.presentationState})",
     returnByValue: true,
   });
   const layout = JSON.parse(result.result.value);
@@ -226,7 +252,8 @@ async function inspectLayout(page, compact) {
   assert(layout.avatar.width > 100 && layout.avatar.height > 100, 'Avatar panel collapsed');
   assert(layout.chat.width > 250 && layout.chat.height > 200, 'Conversation panel collapsed');
   assert(layout.composer.y + layout.composer.height <= layout.height + 1, 'Composer is clipped');
-  assert.match(layout.placeholder, /Temporary 3D mannequin placeholder/i);
+  assert.match(layout.placeholder, /Astra character V1 · rigged locally/i);
+  assert.equal(layout.idleToggle, true, 'Idle activities control is missing');
   assert.deepEqual(layout.voice.map(({ text, disabled }) => ({ text, disabled })), [{ text: 'Mic unavailable', disabled: true }, { text: 'Audio unavailable', disabled: true }]);
   assert(layout.voice.every((button) => button.bottom <= layout.height + 1), 'Reserved voice controls are clipped');
   assert.equal(layout.presentation, 'idle');
@@ -324,8 +351,11 @@ async function main() {
     await delay(1400);
     const idleCpuEnd = cpuSnapshot();
     world = await worldSnapshot(page);
-    assert(world.frames > initialFrames + 3, 'Idle mannequin did not render successive frames');
+    assert(world.frames > initialFrames + 3, 'Idle scene did not render successive frames');
     assert(world.fps >= 20 && world.fps <= 34, `Idle frame rate missed the 30 fps cap: ${JSON.stringify(world)}`);
+    assert.equal(world.characterAsset, 'ready', `Rigged character did not load: ${world.characterError ?? 'unknown'}`);
+    const character = await verifyCharacterMovement(page);
+    assert.equal(character.start.asset, 'ready', 'Character asset regressed to fallback mid-run');
     const idleMetrics = { world, resources: sampleResources(child.pid), systemCpuPercent: Math.round(100 * (1 - (idleCpuEnd.idle - idleCpuStart.idle) / (idleCpuEnd.total - idleCpuStart.total))) };
     await page.send('Runtime.evaluate', { expression: "document.querySelector('.world-pause').click()" });
     await delay(200);

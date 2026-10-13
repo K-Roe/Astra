@@ -35,3 +35,7 @@ logs/
 Thumbs.db
 .idea/
 .vscode/
+
+# Blender scratch
+__pycache__/
+*.blend1

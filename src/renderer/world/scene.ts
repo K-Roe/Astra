@@ -4,6 +4,10 @@ import { worldCameraFraming } from '../../shared/worldCamera';
 export interface LivingWorldScene {
   readonly scene: THREE.Scene;
   readonly camera: THREE.PerspectiveCamera;
+  /** Where a character (real or fallback) is parented. */
+  readonly characterAnchor: THREE.Group;
+  /** Install the procedural stand-in when the real asset is unavailable. */
+  useFallback(): THREE.Group;
   updateIdle(elapsedSeconds: number): void;
   dispose(): void;
 }
@@ -22,26 +26,54 @@ function sphere(parent: THREE.Object3D, radius: number, position: [number, numbe
   return mesh;
 }
 
-function limb(parent: THREE.Group, x: number, y: number, side: number, sleeve: THREE.Material, skin: THREE.Material): THREE.Group {
-  const shoulder = new THREE.Group();
-  shoulder.position.set(x, y, 0);
-  parent.add(shoulder);
-  box(shoulder, [0.25, 0.65, 0.29], [0, -0.32, 0], sleeve);
-  sphere(shoulder, 0.13, [0, -0.69, 0], sleeve);
-  const forearm = new THREE.Group();
-  forearm.position.set(0, -0.69, 0);
-  forearm.rotation.z = side * 0.08;
-  shoulder.add(forearm);
-  box(forearm, [0.21, 0.51, 0.24], [0, -0.25, 0], sleeve);
-  sphere(forearm, 0.13, [0, -0.58, 0], skin);
-  return shoulder;
+/**
+ * The temporary procedural stand-in used only when the character asset cannot
+ * be loaded. Deliberately small and clearly a placeholder.
+ */
+function createFallbackMannequin(): THREE.Group {
+  const hoodie = new THREE.MeshStandardMaterial({ color: '#7449ad', roughness: 1 });
+  const hoodieLight = new THREE.MeshStandardMaterial({ color: '#976aca', roughness: 1 });
+  const trousers = new THREE.MeshStandardMaterial({ color: '#282741', roughness: 1 });
+  const shoes = new THREE.MeshStandardMaterial({ color: '#ccaeeb', roughness: 1 });
+  const skin = new THREE.MeshStandardMaterial({ color: '#edb8ad', roughness: 1 });
+  const hair = new THREE.MeshStandardMaterial({ color: '#8d4bc4', roughness: 1 });
+
+  const figure = new THREE.Group();
+  const hips = new THREE.Group();
+  hips.position.y = 0.84;
+  figure.add(hips);
+  box(hips, [0.34, 0.28, 0.22], [0, 0.02, 0], trousers);
+  for (const side of [-1, 1]) {
+    const leg = new THREE.Group();
+    leg.position.set(side * 0.1, -0.12, 0);
+    hips.add(leg);
+    box(leg, [0.15, 0.52, 0.16], [0, -0.26, 0], trousers);
+    box(leg, [0.14, 0.16, 0.25], [0, -0.6, 0.04], shoes);
+  }
+  const torso = new THREE.Group();
+  torso.position.y = 0.16;
+  hips.add(torso);
+  box(torso, [0.44, 0.6, 0.26], [0, 0.3, 0], hoodie);
+  box(torso, [0.34, 0.1, 0.27], [0, 0.58, -0.01], hoodieLight);
+  for (const side of [-1, 1]) {
+    box(torso, [0.12, 0.44, 0.14], [side * 0.26, 0.24, 0], hoodie);
+    sphere(torso, 0.07, [side * 0.26, 0.0, 0], skin);
+  }
+  const head = new THREE.Group();
+  head.position.y = 0.78;
+  torso.add(head);
+  sphere(head, 0.19, [0, 0.08, -0.02], skin);
+  sphere(head, 0.2, [0, 0.2, -0.07], hair);
+  sphere(head, 0.12, [0.06, 0.37, -0.06], hair);
+  figure.userData.fallbackMaterials = [hoodie, hoodieLight, trousers, shoes, skin, hair];
+  return figure;
 }
 
 export function createLivingWorldScene(): LivingWorldScene {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#21172f');
   const initialFraming = worldCameraFraming(343, 261);
-  const camera = new THREE.PerspectiveCamera(initialFraming.fovDegrees, initialFraming.aspect, 0.1, 30);
+  const camera = new THREE.PerspectiveCamera(initialFraming.fovDegrees, initialFraming.aspect, 0.05, 30);
   camera.position.set(...initialFraming.position);
   camera.lookAt(...initialFraming.target);
 
@@ -50,96 +82,89 @@ export function createLivingWorldScene(): LivingWorldScene {
   const floor = new THREE.MeshStandardMaterial({ color: '#624b70', roughness: 1 });
   const trim = new THREE.MeshStandardMaterial({ color: '#ad82be', roughness: 1 });
   const rug = new THREE.MeshStandardMaterial({ color: '#7e5aaa', roughness: 1 });
-  const hoodie = new THREE.MeshStandardMaterial({ color: '#7449ad', roughness: 1 });
-  const hoodieLight = new THREE.MeshStandardMaterial({ color: '#976aca', roughness: 1 });
-  const trousers = new THREE.MeshStandardMaterial({ color: '#282741', roughness: 1 });
-  const shoes = new THREE.MeshStandardMaterial({ color: '#ccaeeb', roughness: 1 });
-  const skin = new THREE.MeshStandardMaterial({ color: '#edb8ad', roughness: 1 });
-  const hair = new THREE.MeshStandardMaterial({ color: '#8d4bc4', roughness: 1 });
-  const eye = new THREE.MeshStandardMaterial({ color: '#25172f', roughness: 1 });
-  const star = new THREE.MeshStandardMaterial({ color: '#ffdc8f', roughness: 1, side: THREE.DoubleSide });
+  const furniture = new THREE.MeshStandardMaterial({ color: '#3a2b52', roughness: 1 });
+  const cushion = new THREE.MeshStandardMaterial({ color: '#8f6fd4', roughness: 1 });
 
+  // Room shell, sized for a 1.75 m character.
   box(scene, [6.5, 0.12, 4.8], [0, -0.08, 0], floor);
-  box(scene, [6.5, 3.9, 0.12], [0, 1.86, -2.35], wall);
-  box(scene, [0.12, 3.9, 4.8], [-3.19, 1.86, 0], sideWall);
+  box(scene, [6.5, 3.2, 0.12], [0, 1.52, -2.35], wall);
+  box(scene, [0.12, 3.2, 4.8], [-3.19, 1.52, 0], sideWall);
   box(scene, [6.3, 0.08, 0.12], [0, 0.07, -2.26], trim);
-  box(scene, [2.4, 0.015, 1.2], [0.05, 0.01, 0.15], rug);
-  box(scene, [1.25, 0.7, 0.6], [2.15, 0.35, -1.75], sideWall);
-  box(scene, [1.45, 0.09, 0.77], [2.15, 0.76, -1.75], trim);
-  box(scene, [0.95, 1.05, 0.04], [-1.86, 2.28, -2.26], trim);
-  box(scene, [0.79, 0.88, 0.04], [-1.86, 2.28, -2.22], rug);
+  box(scene, [2.6, 0.02, 1.8], [0.1, 0.01, 0.5], rug);
 
-  const figure = new THREE.Group();
-  figure.position.set(0.05, 0, 0.25);
-  scene.add(figure);
-  const hips = new THREE.Group();
-  hips.position.y = 1.19;
-  figure.add(hips);
-  box(hips, [0.72, 0.31, 0.38], [0, 0.03, 0], trousers);
-  const leftLeg = new THREE.Group();
-  const rightLeg = new THREE.Group();
-  for (const [leg, side] of [[leftLeg, -1], [rightLeg, 1]] as const) {
-    leg.position.set(side * 0.23, -0.1, 0);
-    hips.add(leg);
-    box(leg, [0.26, 0.77, 0.28], [0, -0.39, 0], trousers);
-    sphere(leg, 0.14, [0, -0.79, 0], trousers);
-    box(leg, [0.23, 0.34, 0.25], [0, -0.94, 0], trousers);
-    box(leg, [0.3, 0.17, 0.5], [0, -1.14, 0.11], shoes);
+  // Desk against the back wall: obstacle footprint x 0.5..1.9, z -2.05..-1.6.
+  box(scene, [1.4, 0.06, 0.45], [1.2, 0.74, -1.83], trim);
+  for (const dx of [-0.62, 0.62]) {
+    box(scene, [0.06, 0.74, 0.06], [1.2 + dx, 0.37, -1.96], furniture);
+    box(scene, [0.06, 0.74, 0.06], [1.2 + dx, 0.37, -1.7], furniture);
   }
-  const torso = new THREE.Group();
-  torso.position.y = 0.21;
-  hips.add(torso);
-  box(torso, [0.97, 0.88, 0.47], [0, 0.42, 0], hoodie);
-  box(torso, [0.77, 0.15, 0.49], [0, 0.83, -0.03], hoodieLight);
-  const leftArm = limb(torso, -0.6, 0.78, -1, hoodie, skin);
-  const rightArm = limb(torso, 0.6, 0.78, 1, hoodie, skin);
-  const starShape = new THREE.Shape();
-  for (let i = 0; i < 10; i++) {
-    const angle = Math.PI / 2 + i * Math.PI / 5;
-    const radius = i % 2 === 0 ? 0.17 : 0.072;
-    const x = Math.cos(angle) * radius;
-    const y = Math.sin(angle) * radius + 0.43;
-    if (i === 0) starShape.moveTo(x, y);
-    else starShape.lineTo(x, y);
+  box(scene, [1.1, 0.3, 0.04], [1.2, 0.5, -2.02], furniture);
+  // Chair she sits on at desk_seat (1.2, -1.25).
+  box(scene, [0.46, 0.05, 0.44], [1.2, 0.45, -1.25], cushion);
+  box(scene, [0.46, 0.5, 0.05], [1.2, 0.7, -1.46], cushion);
+  for (const dx of [-0.19, 0.19]) {
+    for (const dz of [-0.18, 0.18]) {
+      box(scene, [0.04, 0.45, 0.04], [1.2 + dx, 0.22, -1.25 + dz], furniture);
+    }
   }
-  starShape.closePath();
-  const emblem = new THREE.Mesh(new THREE.ShapeGeometry(starShape), star);
-  emblem.position.z = 0.247;
-  torso.add(emblem);
-  const head = new THREE.Group();
-  head.position.y = 1.12;
-  torso.add(head);
-  sphere(head, 0.34, [0, 0.13, -0.03], skin);
-  sphere(head, 0.36, [0, 0.37, -0.12], hair);
-  sphere(head, 0.22, [0.1, 0.66, -0.11], hair);
-  sphere(head, 0.1, [-0.15, 0.36, 0.16], hair);
-  sphere(head, 0.1, [0.17, 0.37, 0.15], hair);
-  sphere(head, 0.046, [-0.115, 0.19, 0.278], eye);
-  sphere(head, 0.046, [0.115, 0.19, 0.278], eye);
-  box(head, [0.15, 0.022, 0.025], [0.025, 0.01, 0.305], eye);
 
-  scene.add(new THREE.AmbientLight('#faf0ff', 1.6));
-  const key = new THREE.DirectionalLight('#fff0df', 2.3);
+  // Sofa along the right wall: obstacle x 1.95..2.55, z -0.55..0.95.
+  box(scene, [0.6, 0.34, 1.5], [2.25, 0.22, 0.2], furniture);
+  box(scene, [0.14, 0.6, 1.5], [2.5, 0.6, 0.2], cushion);
+  for (const dz of [-0.72, 0.72]) {
+    box(scene, [0.6, 0.42, 0.1], [2.25, 0.45, 0.2 + dz], cushion);
+  }
+
+  // Shelf along the left wall: obstacle x -2.55..-1.75, z -1.9..-1.15.
+  box(scene, [0.8, 0.06, 0.75], [-2.15, 1.1, -1.52], trim);
+  box(scene, [0.8, 0.06, 0.75], [-2.15, 0.5, -1.52], trim);
+  for (const dz of [-0.33, 0.33]) {
+    box(scene, [0.05, 1.2, 0.05], [-2.52, 0.6, -1.52 + dz], furniture);
+  }
+  box(scene, [0.24, 0.3, 0.03], [-2.15, 1.9, -2.26], trim);
+  box(scene, [0.18, 0.24, 0.01], [-2.15, 1.9, -2.24], rug);
+
+  // Stays at the origin: CharacterController sets the character in absolute
+  // room coordinates, so an offset anchor would double-count her position.
+  const characterAnchor = new THREE.Group();
+  scene.add(characterAnchor);
+
+  scene.add(new THREE.AmbientLight('#faf0ff', 1.7));
+  const key = new THREE.DirectionalLight('#fff0df', 2.2);
   key.position.set(3, 6, 5);
   scene.add(key);
+  const rim = new THREE.DirectionalLight('#c9a8ff', 1.1);
+  rim.position.set(-3, 3, -4);
+  scene.add(rim);
+
+  let fallback: THREE.Group | null = null;
 
   return {
     scene,
     camera,
-    updateIdle(elapsedSeconds) {
+    characterAnchor,
+/** Install the procedural stand-in when the real asset is unavailable. */
+    useFallback() {
+      if (!fallback) {
+        fallback = createFallbackMannequin();
+        characterAnchor.add(fallback);
+      }
+      return fallback;
+    },
+    updateIdle(elapsedSeconds: number) {
+      if (!fallback) return;
+      // A gentle breath so the placeholder is not completely static.
       const sway = Math.sin(elapsedSeconds * 1.2);
-      torso.rotation.z = sway * 0.025;
-      head.rotation.y = Math.sin(elapsedSeconds * 0.7) * 0.07;
-      leftArm.rotation.z = -0.08 + sway * 0.055;
-      rightArm.rotation.z = 0.08 - sway * 0.055;
-      leftLeg.rotation.x = sway * 0.018;
-      rightLeg.rotation.x = -sway * 0.018;
+      fallback.position.y = sway * 0.01;
+      fallback.rotation.z = sway * 0.012;
     },
     dispose() {
       scene.traverse((object) => {
         if (object instanceof THREE.Mesh) object.geometry.dispose();
       });
-      for (const material of [wall, sideWall, floor, trim, rug, hoodie, hoodieLight, trousers, shoes, skin, hair, eye, star]) material.dispose();
+      for (const material of [wall, sideWall, floor, trim, rug, furniture, cushion]) material.dispose();
+      const placeholderMaterials = (fallback?.userData.fallbackMaterials as THREE.Material[] | undefined) ?? [];
+      for (const material of placeholderMaterials) material.dispose();
     },
   };
 }

@@ -1,5 +1,25 @@
 # Handover for the next AI agent
 
+## Current LW-02C handover (2026-10-13)
+
+**Read this first: the authority record is out of date.** `AGENTS.md` still says authority stops after LW-02B-R1 and that LW-02C must not begin automatically. It was begun anyway on Karl's direct instruction to continue past the `806c1cf` approval checkpoint. Karl has not yet resolved this on paper, so do not treat LW-02C as ratified and do not begin LW-02D without asking.
+
+**Where things stand.** Astra is now a real rigged character in the application, not the procedural mannequin. `src/assets/astra-character-v1.glb` is shipped locally, loaded over the existing sandboxed IPC bridge, and animated by 15 clips with 11 facial morph targets. `npm run lint` is clean, `npm test` passes 58/58, and `npm run verify:desktop` passes natively with the character loading as `ready` and demonstrably walking. **Nothing has been committed or pushed.** The tree is dirty and holds all LW-02C work.
+
+**Seams worth knowing before editing anything:**
+- `scripts/blender/create_astra_rigged_v1.py` is the only place the rig, weights, morphs and clips are defined. `scripts/blender/astra_character_model.py` holds the shared approved geometry that the LW-02B-R1 review scripts also consume.
+- `src/shared/characterStateMachine.ts`, `characterNavigation.ts`, `characterIdle.ts` and `characterClips.ts` are pure, injected-clock, Node-testable logic. Put behaviour there, not in the controller.
+- `src/renderer/world/characterController.ts` is the only place that touches Three.js animation, navigation and morphs. `characterAsset.ts` owns loading and disposal. `LivingWorldViewport.tsx` owns the render loop and React lifecycle.
+- `App.tsx` is the only source of `CharacterEvent`s. It sends `chat_typing`, `chat_generating`, `chat_reply`, `chat_error` and `chat_interrupted`; do not add a model-driven animation path.
+- The GLB is fetched by the main process on `CHARACTER_ASSET_CHANNEL` because the sandboxed renderer cannot `fetch` a `file://` URL. If you add assets, extend `CHARACTER_ASSET_IDS` in `src/shared/contracts.ts`; never pass a path from the renderer.
+- `tests/characterController.test.mjs` drives the real controller with a stand-in asset. `npm run build` esbuild-bundles the controller to `dist-electron/test/characterController.mjs` for it. The 60-seed sweep in that file is the fastest way to catch navigation regressions.
+
+**Bugs fixed here that are easy to reintroduce.** Arriving at an intermediate waypoint must not end a walk; only exhausting the path should. A `next` link is followed only for the seat that is actually the destination. `IdleScheduler.reset()` restarts the wait interval rather than firing immediately. The scheduler has its own RNG so blinks cannot perturb the schedule. One-shot completion is driven by the clip, not by `stateHoldsClip`. Disabling idle activities stops her where she stands.
+
+**Not done, and not to be assumed:** retopology, lip sync, cloth or hair simulation, voice, memory, and any performance soak. The recorded 30 fps figures come from the desktop verifier's sampling, not from a separate `measure-world.mjs` run. See `docs/CURRENT_STATE.md` for the full evidence list.
+
+## LW-02B-R1 handover (2026-10-13; superseded by LW-02C above)
+
 ## Current LW-02B-R1 handover (2026-10-13)
 
 Karl approved further character refinement only. Preflight found a clean tree at `94521b7` (three local commits ahead of `origin/main`), **nothing pushed and nothing committed this session**. LW-02B-R1 rebuilds the character so it reads as a polished cartoon companion instead of a procedural mannequin. The application is **untouched** and still renders the labelled procedural mannequin. **Karl has not approved the character.** No rig, skin weights, shape keys, clips, GLB, asset loader, voice, memory, website research or autonomous behaviour exists.

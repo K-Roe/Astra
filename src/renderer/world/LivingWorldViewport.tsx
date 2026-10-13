@@ -1,24 +1,61 @@
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { worldCameraFraming } from '../../shared/worldCamera';
 import type { WorldFrameSample } from '../../shared/worldPerformance';
+import type { CharacterSignal } from '../../shared/characterStateMachine';
+
 import { createLivingWorldScene } from './scene';
+import { loadCharacterAsset } from './characterAsset';
+import { CharacterController } from './characterController';
 
 const ACTIVE_FRAME_MS = 1000 / 30;
 const WATCHDOG_MS = 300;
 const MAX_SAMPLES = 512;
 
+type CharacterStatus = 'loading' | 'ready' | 'fallback';
+
 interface DiagnosticViewport extends HTMLDivElement {
   worldSamples?: WorldFrameSample[];
+  astraDiagnostics?: {
+    state: string;
+    clip: string | null;
+    destination: string | null;
+    waypoint: string;
+    x: number;
+    z: number;
+    asset: CharacterStatus;
+  };
 }
 
-export const LivingWorldViewport = memo(function LivingWorldViewport() {
+export interface LivingWorldViewportProps {
+  /** Chat lifecycle events forwarded to the character controller. */
+  readonly chatSignal: CharacterSignal;
+  /** Master switch for the autonomous idle scheduler. */
+  readonly idleEnabled?: boolean;
+  readonly onWaveRequest?: () => void;
+  readonly onCentreRequest?: () => void;
+}
+
+export const LivingWorldViewport = memo(function LivingWorldViewport({
+  chatSignal,
+  idleEnabled = true,
+  onWaveRequest,
+  onCentreRequest,
+}: LivingWorldViewportProps) {
   const containerRef = useRef<DiagnosticViewport>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const controllerRef = useRef<CharacterController | null>(null);
   const [userPaused, setUserPaused] = useState(false);
   const [availability, setAvailability] = useState<'loading' | 'ready' | 'unavailable'>('loading');
+  const [characterStatus, setCharacterStatus] = useState<CharacterStatus>('loading');
   const pausedRef = useRef(false);
   const synchronizeRef = useRef<() => void>(() => {});
+
+  const togglePaused = useCallback(() => {
+    pausedRef.current = !pausedRef.current;
+    setUserPaused(pausedRef.current);
+    synchronizeRef.current();
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -49,6 +86,11 @@ export const LivingWorldViewport = memo(function LivingWorldViewport() {
     const animationStart = performance.now();
     let lastIdleAt = 0;
     let lastFrameAt = 0;
+    let previousTime = performance.now();
+    // Declared up front: publishDiagnostics runs from the very first tick.
+    const characterStatusRef = { current: 'loading' as CharacterStatus };
+    const idleEnabledRef = { current: idleEnabled };
+    let cancelled = false;
 
     function render(source: 'idle' | 'resize') {
       if (disposed) return;
@@ -76,7 +118,7 @@ export const LivingWorldViewport = memo(function LivingWorldViewport() {
       }
     }
 
-    /** Read the preference fresh: a cached MediaQueryList can stay stale when the platform setting changes. */
+    /** Read the preference fresh: a cached MediaQueryList can stay stale. */
     function prefersReducedMotion(): boolean {
       return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     }
@@ -95,11 +137,45 @@ export const LivingWorldViewport = memo(function LivingWorldViewport() {
         world.camera.position.lerp(targetCamera, 0.18);
         currentLook.lerp(targetLook, 0.18);
         world.camera.lookAt(currentLook);
-        world.updateIdle((timestamp - animationStart) / 1000);
+        const elapsed = (timestamp - animationStart) / 1000;
+        world.updateIdle(elapsed);
+        const delta = Math.min((timestamp - previousTime) / 1000, 0.1);
+        previousTime = timestamp;
+        controllerRef.current?.update(delta);
+        trackCharacter();
         render('idle');
         lastFrameAt = timestamp;
+        publishDiagnostics();
       }
       frameRequest = window.requestAnimationFrame(tick);
+    }
+
+    function trackCharacter(): void {
+  const controller = controllerRef.current;
+  if (!controller) return;
+  const position = controller.getDiagnostics().position;
+  // Re-aim so she stays fully in frame wherever she walks. Blending the aim
+  // point keeps the camera from snapping when a journey starts or ends.
+  const framing = worldCameraFraming(canvas!.clientWidth, canvas!.clientHeight, position.x, position.z);
+  const desired = new THREE.Vector3(...framing.position);
+  const desiredLook = new THREE.Vector3(...framing.target);
+      // Lag the follow slightly so movement reads as a gentle pan, not a snap.
+      targetCamera.lerp(desired, 0.05);
+      targetLook.lerp(desiredLook, 0.05);
+    }
+
+    function publishDiagnostics() {
+      const controller = controllerRef.current;
+      const diagnostics = controller?.getDiagnostics();
+      container!.astraDiagnostics = {
+        state: diagnostics?.state ?? 'idle',
+        clip: diagnostics?.clip ?? null,
+        destination: diagnostics?.destination ?? null,
+        waypoint: diagnostics?.waypoint ?? 'centre',
+        x: diagnostics?.position.x ?? 0,
+        z: diagnostics?.position.z ?? 0,
+        asset: characterStatusRef.current,
+      };
     }
 
     function synchronize() {
@@ -107,18 +183,15 @@ export const LivingWorldViewport = memo(function LivingWorldViewport() {
       frameRequest = undefined;
       const state = reason();
       container!.dataset.worldState = state;
-      if (state === 'running') tick(performance.now());
-      else {
+      if (state === 'running') {
+        previousTime = performance.now();
+        tick(performance.now());
+      } else {
         lastFrameAt = 0;
         lastIdleAt = 0;
       }
     }
     synchronizeRef.current = synchronize;
-
-    /** Media query change events are best effort; re-check periodically so a stopped scene can resume. */
-    const watchdog = window.setInterval(() => {
-      if (!disposed && container!.dataset.worldState !== reason()) synchronize();
-    }, WATCHDOG_MS);
 
     const resize = () => {
       const { width, height } = container.getBoundingClientRect();
@@ -144,37 +217,87 @@ export const LivingWorldViewport = memo(function LivingWorldViewport() {
     resizeObserver.observe(container);
     intersectionObserver.observe(container);
     document.addEventListener('visibilitychange', synchronize);
+
+    // Media query change events are best effort; re-check periodically so a
+    // stopped scene can resume when the preference is cleared.
+    const watchdog = window.setInterval(() => {
+      if (!disposed && container!.dataset.worldState !== reason()) synchronize();
+    }, WATCHDOG_MS);
     window.matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', synchronize);
+
     resize();
     synchronize();
     setAvailability('ready');
 
+    void loadCharacterAsset().then((result) => {
+      if (cancelled || disposed) {
+        if (result.status === 'ready') result.asset.dispose();
+        return;
+      }
+      if (result.status === 'failed') {
+        world.useFallback();
+        characterStatusRef.current = 'fallback';
+        setCharacterStatus('fallback');
+        container!.dataset.characterAsset = 'fallback';
+        container!.dataset.characterError = result.reason.slice(0, 120);
+        return;
+      }
+      const controller = new CharacterController(result.asset);
+      controllerRef.current = controller;
+      controller.setIdleEnabled(idleEnabledRef.current);
+      world.characterAnchor.add(result.asset.object);
+      characterStatusRef.current = 'ready';
+      setCharacterStatus('ready');
+      container!.dataset.characterAsset = 'ready';
+    });
+
     return () => {
       disposed = true;
+      cancelled = true;
       window.clearInterval(watchdog);
       if (frameRequest !== undefined) window.cancelAnimationFrame(frameRequest);
       resizeObserver.disconnect();
       intersectionObserver.disconnect();
       document.removeEventListener('visibilitychange', synchronize);
+      window.matchMedia('(prefers-reduced-motion: reduce)').removeEventListener('change', synchronize);
+      controllerRef.current?.dispose();
+      controllerRef.current = null;
       world.dispose();
       renderer.dispose();
       renderer.forceContextLoss();
       delete container.worldSamples;
+      delete container.astraDiagnostics;
       synchronizeRef.current = () => {};
     };
   }, []);
 
-  function togglePaused(): void {
-    pausedRef.current = !pausedRef.current;
-    setUserPaused(pausedRef.current);
-    synchronizeRef.current();
-  }
+  useEffect(() => {
+    controllerRef.current?.send(chatSignal.event);
+  }, [chatSignal]);
+
+  useEffect(() => {
+    controllerRef.current?.setIdleEnabled(idleEnabled);
+  }, [idleEnabled]);
 
   return (
-    <div className="world-viewport" ref={containerRef} data-world-state="loading" data-frame-count="0" data-fps="0" aria-label="Temporary 3D room and articulated Astra mannequin">
-      <canvas ref={canvasRef} aria-label="Procedural living room with temporary full-body Astra mannequin" />
+    <div className="world-viewport" ref={containerRef} data-world-state="loading" data-frame-count="0" data-fps="0" aria-label="Astra in her room">
+      <canvas ref={canvasRef} aria-label="Astra standing in her room" />
       {availability === 'unavailable' && <p className="world-unavailable" role="status">3D is unavailable on this display. Chat remains available.</p>}
-      {availability === 'ready' && <button className="world-pause" type="button" onClick={togglePaused} aria-label={userPaused ? 'Resume 3D scene' : 'Pause 3D scene'}>{userPaused ? 'Resume scene' : 'Pause scene'}</button>}
+      {availability === 'ready' && (
+        <div className="world-controls">
+          <button className="world-pause" type="button" onClick={togglePaused} aria-label={userPaused ? 'Resume 3D scene' : 'Pause 3D scene'}>
+            {userPaused ? 'Resume scene' : 'Pause scene'}
+          </button>
+          <button className="world-action" type="button" onClick={onWaveRequest} disabled={characterStatus !== 'ready'} aria-label="Make Astra wave">
+            Wave
+          </button>
+          <button className="world-action" type="button" onClick={onCentreRequest} disabled={characterStatus !== 'ready'} aria-label="Bring Astra to the centre of the room">
+            Centre
+          </button>
+          {characterStatus === 'loading' && <span className="world-status">Loading Astra…</span>}
+          {characterStatus === 'fallback' && <span className="world-status">Placeholder character</span>}
+        </div>
+      )}
     </div>
   );
 });

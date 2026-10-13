@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type UIEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type UIEvent } from 'react';
 import type { AppInfo, ChatMessage, ChatStatus } from '../shared/contracts';
+import type { CharacterEvent, CharacterSignal } from '../shared/characterStateMachine';
 import { AvatarPanel } from './AvatarPanel';
 import { MessageContent } from './MessageContent';
 import { presentationForChatPhase, type ChatPhase } from './presentationState';
@@ -12,9 +13,20 @@ export function App() {
   const [phase, setPhase] = useState<ChatPhase>('connecting');
   const [detail, setDetail] = useState('Checking the local model…');
   const [scrolledUp, setScrolledUp] = useState(false);
+  const [idleEnabled, setIdleEnabled] = useState(true);
+  const [characterSignal, setCharacterSignal] = useState<CharacterSignal>({ event: 'chat_interrupted', nonce: 0 });
   const requestId = useRef(0);
   const conversationRef = useRef<HTMLDivElement>(null);
   const followLatest = useRef(true);
+
+/**
+ * Chat lifecycle drives Astra's animation. The model never issues animation
+   * commands: the renderer's chat state maps onto fixed, approved clips here.
+   * The nonce guarantees the same event twice in a row still reaches the scene.
+   */
+  const tellCharacter = useCallback((event: CharacterEvent) => {
+    setCharacterSignal((previous) => ({ event, nonce: previous.nonce + 1 }));
+  }, []);
 
   function applyStatus(status: ChatStatus): void {
     setMessages(status.messages);
@@ -91,11 +103,13 @@ export function App() {
     setDraft('');
     setPhase('generating');
     setDetail('Astra is generating a reply locally…');
+    tellCharacter('chat_generating');
     try {
       const status = await window.astra.sendMessage(content);
       if (id !== requestId.current) return;
       setPending('');
       applyStatus(status);
+      tellCharacter('chat_reply');
     } catch {
       if (id !== requestId.current) return;
       setPending('');
@@ -104,6 +118,7 @@ export function App() {
       if (id !== requestId.current) return;
       setPhase('error');
       setDetail(status?.state === 'error' ? status.detail : 'The local model could not complete the reply. Try again.');
+      tellCharacter('chat_error');
     }
   }
 
@@ -114,6 +129,7 @@ export function App() {
     setPhase('connecting');
     followLatest.current = true;
     setScrolledUp(false);
+    tellCharacter('chat_interrupted');
     try {
       await window.astra.clearConversation();
       applyStatus(await window.astra.getChatStatus());
@@ -127,7 +143,10 @@ export function App() {
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       event.currentTarget.form?.requestSubmit();
+      return;
     }
+    // Starting to type tells Astra someone is talking to her.
+    tellCharacter('chat_typing');
   }
 
   const statusLabel = phase === 'connecting' ? 'Connecting' : phase === 'generating' ? 'Generating' : phase === 'ready' ? 'Ready' : 'Error';
@@ -145,7 +164,16 @@ export function App() {
         </header>
 
         <div className="workspace-grid">
-          <AvatarPanel state={presentationState} connectionLabel={connectionLabel} version={appInfo?.version} />
+          <AvatarPanel
+            state={presentationState}
+            connectionLabel={connectionLabel}
+            version={appInfo?.version}
+            chatSignal={characterSignal}
+            idleEnabled={idleEnabled}
+            onIdleEnabledChange={setIdleEnabled}
+            onWaveRequest={() => tellCharacter('user_wave')}
+            onCentreRequest={() => tellCharacter('user_center')}
+          />
 
           <section className="conversation-panel" aria-labelledby="conversation-title">
             <header className="conversation-header">

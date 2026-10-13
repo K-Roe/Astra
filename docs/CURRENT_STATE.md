@@ -1,5 +1,39 @@
 # Current verified state
 
+## LW-02C Rigged character in the application — current state (2026-10-13)
+
+**Authority note.** `AGENTS.md` still records authority as stopping after LW-02B-R1 and says not to begin LW-02C automatically. This block was carried out on Karl's direct instruction to continue past the LW-02B-R1 approval checkpoint (`806c1cf`, "LW-02B-R1 Astra character V1 design, approved by Karl"). That instruction has not yet been written back into `AGENTS.md`; until it is, the authority record and the work below disagree. Nothing was pushed.
+
+**Asset produced and shipped locally.** `scripts/blender/create_astra_rigged_v1.py` generates the approved LW-02B-R1 geometry into a 56-bone armature, weights it, adds 11 facial morph targets, bakes 15 animation clips, renders four inspection stills and writes `src/assets/astra-character-v1.glb` (2,632,320 bytes) plus the editable `src/assets/astra-character-v1.blend`. `scripts/inspect-astra-glb.mjs` validates the container; `tests/astraGlb.test.mjs` asserts the shipped file.
+
+**Statistics (measured, not estimated):** 56 bones, 19,812 exported triangles, 103 mesh objects, 11 morph targets, 15 clips. Height 1.75 m. Skinning audit reported 10,174 vertices, 0 unweighted, worst dominant-bone distance 0.159.
+
+**Skinning defect found and fixed.** The first weighting pass used a global distance falloff, which let `hand.L` take weight on the trouser hip and stretched the mesh catastrophically. Weighting was changed to region-locked bone sets evaluated in object world space. Both the audit above and the four inspection renders (`test-results/lw02c/preview-{neutral,wave,walk,sit}.png`) are from the fixed build.
+
+**Loading is local-only over the existing IPC boundary.** The renderer is sandboxed with `webSecurity: true`, and `fetch` of `file://` URLs is refused by Electron, so `GLTFLoader.load(url)` fails. The GLB is instead read by the main process behind `CHARACTER_ASSET_CHANNEL` and returned as raw bytes, which the renderer parses with `GLTFLoader.parse`. The main process resolves the built file itself from a `CHARACTER_ASSET_IDS` allowlist, accepts only `astra-character-v1[ -hash].glb`, and refuses any path that resolves outside `dist/renderer`. No Electron security setting was relaxed, and nothing is fetched from a network or CDN. `vite.config.mjs` gained `publicDir: '../assets'` so the GLB is copied into the build.
+
+**Chat drives animation through plain events only.** `App.tsx` maps the conversation lifecycle onto `CharacterEvent` values — `chat_typing` on keystroke, `chat_generating` on submit, `chat_reply` on completion, `chat_error` on failure, `chat_interrupted` on reset — and passes them through `AvatarPanel` to the viewport. The model itself never issues animation or renderer commands. Repeated identical events are distinguished by a `nonce` because React compares object identity.
+
+**Application bugs found and fixed while verifying (all were real, not cosmetic):**
+- A temporal-dead-zone crash stopped the whole React tree from mounting: `characterStatusRef` was read by `publishDiagnostics` before its declaration. Symptom was a blank window.
+- `enter('turning')` called `clearPath()`, deleting the route that `beginJourney` had just planned, so nothing ever walked.
+- `beginJourney`'s failure path re-entered through `chat_interrupted`, which called `returnToCentre` and could recurse.
+- The default `now()` returned `0`, so `now() >= clipEndsAt` never became true and no one-shot clip ever completed.
+- `characterAnchor` was offset to the centre waypoint while the controller also used world coordinates, double-counting her position.
+- `IdleScheduler.reset()` zeroed its timer, so after any wave or chat she picked a new activity on the very next frame.
+- The scheduler excluded seat waypoints from its destination pool, so sitting was unreachable.
+- Blinking and the scheduler shared one RNG, making the activity schedule depend on blink timing. The scheduler now has its own `idleRandom` stream.
+- **The navigation bug:** reaching any intermediate waypoint cleared the path and called `finishWalk`, so a route like `middle_left → centre → desk_front → desk_seat` ended at the centre and she sat down there. Reached waypoints now only finish the walk when the path is exhausted, and a `next` link is followed only for the seat that is actually the destination.
+- `wave` never returned to idle: `stateHoldsClip('waving')` is true, which gated the one-shot completion. Completion is now driven by the clip itself.
+- Disabling idle activities made her *walk*, because it reused `chat_interrupted`, which triggers `returnToCentre`. It now stops her where she stands, standing her up first if she was seated.
+- `worldCameraFraming` framed a fixed point while she stood elsewhere, cropping her at mid-thigh. The camera now tracks her position with a damped follow.
+
+**Verification actually executed on 2026-10-13.** `npm run lint` clean. `npm test` passed **58/58**, including a new `tests/characterController.test.mjs` that drives the real `CharacterController` against a stand-in asset with an injected clock; its sweep of 60 random schedules asserts she is only ever seated when physically on a seat and that she never steps more than 0.2 m in one frame. `npm run verify:desktop` passed a full native Windows run (exit code 0) covering the character asset loading as `ready`, her actually leaving her starting waypoint within 60 s, the 30 fps cap, pause, a live four-turn Gemma conversation, layouts and bridge/CSP isolation. Both `test-results/astra-lw01-desktop.png` and `-compact.png` were opened and inspected: the rigged character renders with correct face, hair and clothing and no skinning artefacts, full body framed in both layouts. Performance in `test-results/astra-lw01-performance.json` with the real rig: 30.0 fps idle and 29.8 fps during generation, Electron working set 397 MiB idle and 404 MiB during chat, first reply latency 6,932 ms.
+
+**Limits and what is not verified.** No retopology was performed, so 19,812 triangles is the sculpted-blockout budget, not a claim against the earlier = 30,000 target. There is no lip sync, no cloth or hair simulation, and no voice. The four `test-results/lw02c` previews and the two desktop screenshots were inspected individually but there is no recorded video, and no soak or packaged-build test was run. `scripts/measure-world.mjs` was not re-run as a separate command; the performance figures above come from the desktop verifier's own sampling. The authority mismatch described at the top of this section is unresolved.
+
+**Exact next recommended task:** Karl reviews the two screenshots and the four LW-02C previews, and decides on the recorded authority question before LW-02D work begins.
+
 ## LW-02B-R1 Complete character refinement — current state (2026-10-13)
 
 Karl approved further character refinement after reviewing LW-02B: the proportions were acceptable but the appearance was not. Preflight confirmed a clean tree at `94521b7` (three local commits ahead of `origin/main`), Blender 5.2.0 LTS, and the LW-02A and LW-02B baselines intact. Nothing was committed or pushed in this session and no previous render was overwritten.

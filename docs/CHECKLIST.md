@@ -40,6 +40,23 @@ Status meanings: `[x]` verified by the stated check; `[ ]` pending. A checked de
 - [ ] Phase 05 offline speech recognition. Check: approved local STT works disconnected with explicit microphone permission, denial/revocation and correction flow.
 - [ ] Phase 06 lip-sync and expressions. Check: inspected synchronization to actual audio timing, neutral fallback, cancellation and performance evidence.
 
+## LW-02C Rigged character in the application
+
+Authority warning: `AGENTS.md` still records authority as stopping after LW-02B-R1. This block was carried out on Karl's direct instruction to continue past the `806c1cf` approval checkpoint, and that instruction is not yet recorded on paper. See `docs/CURRENT_STATE.md`.
+
+- [x] Build a production rig over the approved LW-02B-R1 geometry. Check: `scripts/blender/create_astra_rigged_v1.py` produces a 56-bone armature with glTF-style names; `scripts/inspect-astra-glb.mjs` and `tests/astraGlb.test.mjs` confirm the shipped container (2026-10-13).
+- [x] Weight the mesh without artefacts. Check: the first global-distance weighting let `hand.L` take weight on the trouser hip and stretched the mesh; weighting was changed to region-locked bone sets in object world space. Final audit: 10,174 vertices, 0 unweighted, worst dominant-bone distance 0.159. Four previews in `test-results/lw02c/` were inspected (2026-10-13).
+- [x] Export a versioned local GLB with morph targets and clips. Check: `src/assets/astra-character-v1.glb` (2,632,320 bytes) holds 19,812 triangles, 103 mesh objects, 11 morph targets and 15 clips; asserted by `npm test` (2026-10-13).
+- [x] Load the character without relaxing Electron security. Check: the sandboxed renderer cannot `fetch` a `file://` URL, so the main process reads the GLB behind `CHARACTER_ASSET_CHANNEL` from a `CHARACTER_ASSET_IDS` allowlist and returns raw bytes for `GLTFLoader.parse`; no security setting was relaxed and no network or CDN is used (2026-10-13).
+- [x] Drive animation from chat lifecycle events only. Check: `App.tsx` emits `chat_typing`, `chat_generating`, `chat_reply`, `chat_error` and `chat_interrupted`; the verifier's chat window recorded `characterState: "thinking"` with clip `thinking` while generating (2026-10-13).
+- [x] Make the idle schedule bounded, local and predictable. Check: `src/shared/characterIdle.ts` chooses only approved actions over a fixed waypoint set with no model calls; tests assert she only sits when physically on a seat and never steps more than 0.2 m in a frame across 60 random schedules (2026-10-13).
+- [x] Provide an explicit idle on/off control. Check: `AvatarPanel` renders `.idle-toggle`; live probing confirmed she freezes in place when switched off and resumes when switched back on (2026-10-13).
+- [x] Keep a deterministic fallback. Check: if the asset fails, `world.useFallback()` installs the procedural mannequin and `data-character-asset` becomes `fallback` (2026-10-13).
+- [x] Preserve the 30 fps scene baseline with the real rig. Check: `npm run verify:desktop` passed natively with exit code 0, the character loading as `ready` and demonstrably walking; `test-results/astra-lw01-performance.json` recorded 30.0 fps idle and 29.8 fps during generation, Electron working set 397 MiB idle and 404 MiB during chat (2026-10-13). **Not verified:** a separate `npm run measure:world` run, and any soak test.
+- [x] Preserve unrelated changes and report honestly. Check: `npm run lint` clean, `npm test` 58/58 with production build, both desktop and compact screenshots opened and inspected, nothing committed and nothing pushed (2026-10-13).
+- [ ] Karl's review of LW-02C and a decision on the authority record. Check: Karl reviews `test-results/astra-lw01-desktop.png`, `test-results/astra-lw01-compact.png` and the four LW-02C previews, and `AGENTS.md` is updated to record the LW-02C authority. **LW-02D may not begin before this.**
+- [ ] Retopology to the production triangle budget. Check: not started; 19,812 triangles is the sculpted-blockout count, not a claim against the = 30,000 target (2026-10-13).
+
 ## LW-02B-R1 Complete character refinement
 
 - [x] Preflight and preserve all approved work. Check: clean tree at `94521b7`, Blender 5.2.0 LTS, LW-02A and LW-02B scripts and renders intact; nothing committed or pushed and no previous render overwritten (2026-10-13).
