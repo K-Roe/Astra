@@ -1,6 +1,6 @@
 # ASTRA
 
-A standalone, local-first Windows AI companion in development. LW-02A adds a measured 30 fps scene, dimension-driven full-body camera framing and a reviewable non-rigged Blender character design prototype beside current-session conversation with the locally installed Gemma 3 4B model. The prototype is design evidence only: the app still shows the labelled procedural mannequin. Final character artwork, rig, voice, persistent memory, cloud services and computer control are not implemented.
+A standalone, local-first Windows AI companion in development. LW-02B refines the full-body 3D character design to a 1.70 m, 5.76-head stylised Astra with a violet loose updo, expressive face, purple star hoodie, dark trousers and trainers, rendered as a **non-rigged design blockout awaiting Karl's visual approval**. The application itself still shows the labelled procedural mannequin next to current-session conversation with the locally installed Gemma 3 4B model. No production rig, GLB integration, voice, persistent memory, cloud services or computer control is implemented.
 
 ## Requirements
 
@@ -34,15 +34,23 @@ npm run measure:world
 
 `measure:world` records per-state frame intervals, renderer CPU time, draw calls and system resource samples while Gemma is idle, generating and finished, plus compact resize, minimize/restore, manual pause, reduced-motion and the WebGL fallback. Output is ignored under `test-results/lw02a/`. Add `--baseline` to capture the older 12 fps cap for comparison and `--allow-occluded` in the same situation as above.
 
-## Character design prototype
+## Character design
 
-`docs/LW02A_CHARACTER_SPEC.md` holds the proposed appearance, Blender-to-GLB contract, skeleton, facial controls, clip list and review budgets. The non-rigged blockout and its five review renders are regenerated with local Blender:
+`docs/LW02B_CHARACTER_SPEC.md` holds the refined appearance, proportion sheet, palette, the proposed glTF-named skeleton, facial controls, animation-readiness mapping and the Blender-to-GLB export plan. `docs/LW02A_CHARACTER_SPEC.md` is preserved as the superseded first pass. Both are **design proposals awaiting approval**; neither is a rig or a shipped asset.
+
+Generate the refined LW-02B blockout, its six review views, the in-room view and the editable `.blend` with local Blender:
 
 ```powershell
-& 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' --background --factory-startup --python scripts/blender/create_astra_design_prototype.py
+& 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' --background --factory-startup --python scripts/blender/create_astra_character_refined.py
 ```
 
-The script accepts an output folder after `--` and writes the five `docs/review/lw02a/astra-design-prototype-*.png` images plus the editable `.blend`.
+Build the LW-02A versus LW-02B comparison sheet from any two character renders:
+
+```powershell
+& 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' --background --factory-startup --python scripts/blender/make_astra_design_comparison.py -- docs/review/lw02a/astra-design-prototype-neutral-front.png docs/review/lw02b/astra-lw02b-front.png docs/review/lw02b
+```
+
+The character script accepts an output folder after `--` and defaults to `test-results/lw02b/design`. Committed review images live in `docs/review/lw02a/` and `docs/review/lw02b/`; the superseded LW-02A blockout is still reproducible with `scripts/blender/create_astra_design_prototype.py`.
 
 ## Layout and continuity
 
@@ -50,7 +58,7 @@ The script accepts an output folder after `--` and writes the five `docs/review/
 - `src/preload/`: bundled, sandbox-compatible context bridge.
 - `src/renderer/`: React Living Companion UI, isolated procedural Three.js viewport and restrictive CSP.
 - `src/shared/`: typed bridge contract, safe message-block parser, 3D camera framing and frame-performance summary helpers.
-- `tests/` and `scripts/`: foundation, chat-service, formatting, camera/performance and Windows layout/launch, scene-measurement and Blender design-prototype checks.
+- `tests/` and `scripts/`: foundation, chat-service, formatting, camera/performance and Windows layout/launch, scene-measurement, and Blender character-design scripts.
 - `docs/`: plan, decisions, verified state and handover.
 
 Read `AGENTS.md` and the continuity documents before changing the project. Models, personal memory, backups and secrets must stay outside the tracked source tree. No existing assistant history is seeded into Astra.

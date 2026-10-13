@@ -1,6 +1,22 @@
 # Handover for the next AI agent
 
-## Current LW-02A handover (2026-10-13)
+## Current LW-02B handover (2026-10-13)
+
+Karl approved **visual character refinement only**. The LW-02A work was reviewed and committed locally as `3bf91b8` (branch is two commits ahead of `origin/main`); **nothing has been pushed**. LW-02A added a reviewed design proposal and a non-rigged Blender prototype; LW-02B replaced that prototype with a much better **refined blockout** and a written animation-readiness and GLB-export plan. The application is untouched: it still renders the labelled procedural mannequin. **Karl has not approved the character.** No rig, GLB, armature, skin weights, shape keys, animation clips, voice, memory, website research or autonomous behaviour exists.
+
+**Key result:** the refined design is a 1.70 m, 5.76-heads-tall stylised young-adult woman built from lofted sections — 32,588 triangles across 118 objects — with a fitted violet updo, expressive eyes and brows, a mischievous smile, a purple star hoodie, dark trousers and trainers. It replaces a ~3.5-head chibi blockout. See `docs/LW02B_CHARACTER_SPEC.md` and `docs/review/lw02b/`.
+
+**Files/seams:** `scripts/blender/create_astra_character_refined.py` generates the blockout, its six views, its in-room view and the editable `.blend`; `scripts/blender/make_astra_design_comparison.py` builds the side-by-side sheet; `scripts/blender/create_astra_design_prototype.py` is the preserved LW-02A "before" record and must not be edited. `src/renderer/world/` is unchanged by LW-02B and still owns the working Three.js scene.
+
+**Verification actually run:** `npm run lint` clean; `npm test` 11/11 with production build; `node scripts/verify-desktop.mjs --allow-occluded` passed natively (PID 44432, exit 0); `node scripts/measure-world.mjs --allow-occluded` held 30.0 fps (p95 33.6–33.8 ms) in every state with zero frames while minimized or paused, matching the LW-02A baseline. The strict, non-`--allow-occluded` runs failed only because Chromium reports this session's window as hidden while another window holds foreground — an environment limitation, recorded in the evidence JSON.
+
+**Watch out for:** the head/face landmark table (`HEAD_RINGS`, `FACE`) is the single source of truth for facial placement — features are positioned with `head_surface_y(z, x)` so they sit on the skull; changing a ring without moving its features will sink them. Hands fan fingers across the **X width axis**; an earlier version used Y and the hands rendered as combs. EEVEE uses a Standard view transform, not AgX, because AgX washed the palette out.
+
+**Outstanding:** Karl's visual decision (proportions, updo, hood, hair framing, hands, shoes, palette saturation); then and only then retopology, the rig, morph targets, clips, GLB export, application integration and a performance measurement against the 32,588-triangle blockout. Also still open: OS reduced-motion and offscreen acceptance runs, disconnected-network, soak and packaged-build tests, M1 offline acceptance.
+
+**Exact next recommended task:** Karl reviews `docs/review/lw02b/` (start with `astra-lw02b-comparison-lw02a-vs-lw02b.png`). **Stop at LW-02B and request his approval before any rigging or integration work. Do not begin LW-02C.**
+
+## Historical LW-02A handover (2026-10-13; superseded above)
 
 Karl approved a **character design and 3D performance gate**. The app still renders the labelled procedural mannequin; the Blender work is a design proposal awaiting Karl's visual approval, not a production asset. Chat, the approved Gemma digest, Electron main/preload, CSP and the sandbox are unchanged. No rig, GLB integration, animation controller, room simulation, voice, memory, website research, autonomous tools or fine-tuning was added.
 

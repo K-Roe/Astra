@@ -1,6 +1,9 @@
 # LW-02A Astra character design specification
 
-Status: **design proposal for Karl's review, not approved production art or rig**. The procedural mannequin remains the application's working fallback. The Blender blockout is a separate visual prototype; no GLB or animation controller is integrated.
+Status: **historical. Superseded for design by `docs/LW02B_CHARACTER_SPEC.md` (LW-02B).** The
+LW-02A blockout and its renders are preserved unchanged as the "before" record for the LW-02A to
+LW-02B comparison. The procedural mannequin remains the application's working fallback, the design
+still lacks Karl's approval, and no GLB or animation controller is integrated.
 
 ## Visual identity and proportion sheet
 

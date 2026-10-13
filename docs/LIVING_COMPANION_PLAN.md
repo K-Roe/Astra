@@ -1,8 +1,19 @@
 # Living Companion implementation plan
 
-Current authorization: **LW-02A character design and 3D performance gate**, superseding LW-01 as the current working state. The React layout, the procedural full-body mannequin in a basic room, a measured 30 fps render budget, dimension-driven desktop/compact camera framing and a non-rigged Blender design prototype with five review renders are implemented. No production rig, GLB integration, animation engine, room simulation, microphone, speech engine or lip-sync exists. Each later stage requires Karl's separate approval and must preserve the local Ollama chat and Electron security boundary. The original 2D layered-art suggestions below are historical proposals; Karl's full-body 3D direction is now captured in `LW02A_CHARACTER_SPEC.md`.
+Current authorization: **LW-02B refined character design**, superseding LW-02A as the current working state. The React layout, the procedural full-body mannequin, the measured 30 fps scene budget and the dimension-driven desktop/compact camera framing remain implemented and unchanged. LW-02B adds a **refined, non-rigged character blockout** with seven review renders, an LW-02A/LW-02B comparison sheet and a written skeleton/facial-control/GLB plan. There is still **no production rig, no GLB, no asset loader, no animation controller, no room simulation, no microphone, no speech engine and no lip-sync**. Every later stage requires Karl's separate approval and must preserve the local Ollama chat and Electron security boundary.
 
-## LW-02A — character design and 3D performance gate (implemented; verification in CURRENT_STATE.md)
+## LW-02B — refined character design (implemented; awaiting Karl's approval)
+
+- Rebuilt the character at 1.70 m and 5.76 heads using lofted elliptical sections instead of stacked primitives: readable skull, jaw and cheek, expressive eyes with lid lines, tapered brows, slim nose, asymmetric mischievous smile, fitted loose updo, sectioned hoodie with a collar-down hood, kangaroo pocket and a chest-conformed star emblem, tapered trousers and trainers with toe box, sole, heel counter and laces.
+- Fixed two genuine modelling defects found by inspecting renders: fingers fanned across the depth axis instead of the width axis, and facial landmarks placed independently of the skull surface.
+- Documented animation readiness only: a proposed glTF-named bone hierarchy, shape-key and expression/mouth-shape sets, the motion-to-bone mapping, and a seven-step Blender-to-GLB export plan with a deterministic mannequin fallback.
+- Verified the working application is untouched: lint, 11/11 tests, native desktop verification and a 30.0 fps scene measurement matching the LW-02A baseline.
+
+**Boundary:** stop here. Karl must approve or revise the design before any rigging, GLB export or integration. Do not begin LW-02C automatically.
+
+## LW-02A — character design and 3D performance gate (implemented; superseded above)
+
+## LW-02A — character design and 3D performance gate (implemented; superseded above)
 
 - Measured why the LW-01 scene reported about 10.9 fps during Gemma generation: LW-01's own 12 fps `setTimeout` cap, not a renderer stall. A controlled replay of that cap measures about 10.75 fps, while `renderer.render` uses roughly 0.4 ms CPU per frame.
 - Replaced that cap with a 30 fps `requestAnimationFrame` budget with the same stop conditions. Idle, generating, finished, compact, restored and resumed samples all hold 30 fps; minimized and manual pause render nothing.
