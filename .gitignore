@@ -1,0 +1,37 @@
+# Dependencies and build output
+node_modules/
+dist/
+dist-electron/
+build/
+coverage/
+test-results/
+*.tsbuildinfo
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.pfx
+
+# Runtime data must live outside this repository; ignore accidental local copies.
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+*.gguf
+*.safetensors
+*.onnx
+models/
+data/
+backups/
+logs/
+*.log
+
+# Editor/OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
