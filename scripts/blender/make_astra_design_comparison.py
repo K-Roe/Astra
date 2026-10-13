@@ -1,7 +1,9 @@
-"""Build the LW-02A vs LW-02B design comparison sheet for human review.
+"""Build an Astra design comparison sheet for human review.
 
 Usage:
-  blender --background --factory-startup --python scripts/blender/make_astra_design_comparison.py -- <before.png> <after.png> <output_dir>
+  blender --background --factory-startup \
+      --python scripts/blender/make_astra_design_comparison.py -- \
+      <before.png> <after.png> <output_dir> [output_name] [before_label] [after_label]
 
 The two character renders are placed side by side on unlit image planes with
 caption text. The output is a single review PNG; it makes no claim about
@@ -15,13 +17,18 @@ import bpy
 
 args = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
 if len(args) < 3:
-    raise SystemExit("usage: make_astra_design_comparison.py <before.png> <after.png> <output_dir>")
+    raise SystemExit(
+        "usage: make_astra_design_comparison.py <before.png> <after.png> <output_dir> "
+        "[output_name] [before_label] [after_label]"
+    )
 
 BEFORE = Path(args[0]).resolve()
 AFTER = Path(args[1]).resolve()
 OUTPUT = Path(args[2]).resolve()
 OUTPUT.mkdir(parents=True, exist_ok=True)
-DESTINATION = OUTPUT / "astra-lw02b-comparison-lw02a-vs-lw02b.png"
+DESTINATION = OUTPUT / (args[3] if len(args) > 3 else "astra-lw02b-comparison-lw02a-vs-lw02b.png")
+LEFT_CAPTION = args[4] if len(args) > 4 else "LW-02A blockout (superseded)\n~3.5 heads tall, oversized head,\nball-joint limbs, cylinder hands"
+RIGHT_CAPTION = args[5] if len(args) > 5 else "LW-02B refined design - AWAITING KARL'S APPROVAL\n1.70 m, 5.76 heads, lofted anatomy,\nreadable hands, loose updo, star hoodie"
 
 bpy.ops.object.select_all(action="SELECT")
 bpy.ops.object.delete(use_global=False)
@@ -99,30 +106,12 @@ def caption(name, body, centre_x, size, top_z):
 left_x = -(PANEL_WIDTH + GAP) / 2
 right_x = (PANEL_WIDTH + GAP) / 2
 
-image_panel("LW-02A blockout panel", BEFORE, left_x)
-image_panel("LW-02B refined panel", AFTER, right_x)
+image_panel("Before panel", BEFORE, left_x)
+image_panel("After panel", AFTER, right_x)
 
-caption(
-    "LW-02A caption",
-    "LW-02A blockout (superseded)\n~3.5 heads tall, oversized head,\nball-joint limbs, cylinder hands",
-    left_x,
-    0.028,
-    -0.58,
-)
-caption(
-    "LW-02B caption",
-    "LW-02B refined design - AWAITING KARL'S APPROVAL\n1.70 m, 5.76 heads, lofted anatomy,\nreadable hands, loose updo, star hoodie",
-    right_x,
-    0.028,
-    -0.58,
-)
-caption(
-    "Header",
-    "ASTRA CHARACTER DESIGN - LW-02A to LW-02B COMPARISON",
-    0.0,
-    0.034,
-    0.745,
-)
+caption("Before caption", LEFT_CAPTION, left_x, 0.028, -0.58)
+caption("After caption", RIGHT_CAPTION, right_x, 0.028, -0.58)
+caption("Header", "ASTRA CHARACTER DESIGN COMPARISON", 0.0, 0.034, 0.745)
 
 camera_data = bpy.data.cameras.new("Comparison camera")
 camera = bpy.data.objects.new("Comparison camera", camera_data)

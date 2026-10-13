@@ -1,8 +1,19 @@
 # Living Companion implementation plan
 
-Current authorization: **LW-02B refined character design**, superseding LW-02A as the current working state. The React layout, the procedural full-body mannequin, the measured 30 fps scene budget and the dimension-driven desktop/compact camera framing remain implemented and unchanged. LW-02B adds a **refined, non-rigged character blockout** with seven review renders, an LW-02A/LW-02B comparison sheet and a written skeleton/facial-control/GLB plan. There is still **no production rig, no GLB, no asset loader, no animation controller, no room simulation, no microphone, no speech engine and no lip-sync**. Every later stage requires Karl's separate approval and must preserve the local Ollama chat and Electron security boundary.
+Current authorization: **LW-02B-R1 complete character refinement**, superseding LW-02B as the current working state. The React layout, the procedural full-body mannequin, the measured 30 fps scene budget and the dimension-driven desktop/compact camera framing remain implemented and unchanged. LW-02B-R1 replaces the character's face with a **single sculpted mesh** (real eye sockets, brow ridge, nose, integrated lips, cheekbones and chin) with eyeballs seated in those sockets, rebuilds the hair as overlapping soft masses with a gathered updo and side-swept fringe, and polishes the shoulders, hood, pocket, trousers and trainers. Ten review renders and a comparison sheet are in `docs/review/lw02b-r1/`; the specification is `docs/LW02B_R1_CHARACTER_SPEC.md`. There is still **no production rig, no GLB, no asset loader, no animation controller, no room simulation, no microphone, no speech engine and no lip-sync**, and **Karl has not approved the character**. Every later stage requires Karl's separate approval and must preserve the local Ollama chat and Electron security boundary.
 
-## LW-02B — refined character design (implemented; awaiting Karl's approval)
+## LW-02B-R1 — complete character refinement (implemented; awaiting Karl's approval)
+
+- Diagnosed that LW-02B's procedural face was caused by features being floating primitives rather than by shading or polygon count, and rebuilt the head as one displaced mesh driven by a shared skull landmark table.
+- Seated spherical eyeballs inside sculpted sockets with wrapping eyelids, lash lines, irises, pupils, glints and relaxed asymmetric eyebrows; added a second `smile` expression alongside the neutral face.
+- Rebuilt hair as a full crown, back layer, gathered bun with a twist, two lofted side-swept fringe bands, cheek-framing masses and loose wisps.
+- Polished shoulders, sleeves, hood, kangaroo pocket, folds, hem, hip blending, trousers and trainers; applied lightweight materials and one consistent lighting rig.
+- Added an automated validation pass (names, transforms, materials, degenerate faces, duplicate vertices, inverted normals) reporting zero problems, and an animation-readiness review listing the geometry that will deform poorly.
+- Inspected every render and corrected seven rounds of defects. Verified the application is unchanged: lint, 11/11 tests, native desktop verification, and a 29.9–30.0 fps scene matching the previous baseline.
+
+**Boundary:** stop here. Karl must approve or revise the design before any retopology, rigging, morph targets, GLB export or integration. Do not begin LW-02C automatically.
+
+## LW-02B — refined character design (implemented; superseded above)
 
 - Rebuilt the character at 1.70 m and 5.76 heads using lofted elliptical sections instead of stacked primitives: readable skull, jaw and cheek, expressive eyes with lid lines, tapered brows, slim nose, asymmetric mischievous smile, fitted loose updo, sectioned hoodie with a collar-down hood, kangaroo pocket and a chest-conformed star emblem, tapered trousers and trainers with toe box, sole, heel counter and laces.
 - Fixed two genuine modelling defects found by inspecting renders: fingers fanned across the depth axis instead of the width axis, and facial landmarks placed independently of the skull surface.

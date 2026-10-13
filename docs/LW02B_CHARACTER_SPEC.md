@@ -1,9 +1,12 @@
 # LW-02B Astra refined character specification
 
-Status: **design proposal awaiting Karl's visual approval. Not accepted art, not a rig, not integrated.**
-The application still renders the labelled procedural mannequin from LW-01. No GLB, armature, skin
-weights, shape keys or animation clips exist anywhere in this project. LW-02B produced a better
-*design* and a written *plan* for the asset; it deliberately produced no production asset.
+Status: **historical. Superseded for design by `docs/LW02B_R1_CHARACTER_SPEC.md` (LW-02B-R1).**
+Karl reviewed the LW-02B renders and found the appearance still not acceptable — procedural face,
+protruding eyes, prominent nose, startled eyebrows, helmet-like hair, cylindrical arms and rigid
+clothing. The proportions and technical progress recorded below were accepted and carried forward; the
+face, hair, shoulders, hood and trainer work was rebuilt. The blockout and its renders are preserved
+unchanged as the "before" record for the LW-02B versus LW-02B-R1 comparison. The procedural
+mannequin remains the application's working fallback and no GLB or animation controller is integrated.
 
 ## 1. What changed from LW-02A
 

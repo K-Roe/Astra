@@ -1,6 +1,22 @@
 # Handover for the next AI agent
 
-## Current LW-02B handover (2026-10-13)
+## Current LW-02B-R1 handover (2026-10-13)
+
+Karl approved further character refinement only. Preflight found a clean tree at `94521b7` (three local commits ahead of `origin/main`), **nothing pushed and nothing committed this session**. LW-02B-R1 rebuilds the character so it reads as a polished cartoon companion instead of a procedural mannequin. The application is **untouched** and still renders the labelled procedural mannequin. **Karl has not approved the character.** No rig, skin weights, shape keys, clips, GLB, asset loader, voice, memory, website research or autonomous behaviour exists.
+
+**Key result:** the LW-02B face failed because its features were floating primitives pasted onto a smooth skull. R1 replaces that with a **single sculpted head mesh** — real eye sockets, brow ridge, nose, lips, cheekbones and chin displaced into the skull — with spherical eyeballs seated in the sockets, lids that wrap them, and integrated lips. Hair became overlapping soft masses with a proper gathered bun and lofted side-swept fringe bands. 40,232 triangles, 129 objects, 24 materials, 1.7498 m tall, **zero validation problems**. See `docs/LW02B_R1_CHARACTER_SPEC.md`.
+
+**Files/seams:** `scripts/blender/create_astra_character_r1.py` is the reproducible source and the only place the model is defined; it prints its own geometry report, dimensions and validation result, saves an editable `.blend`, and renders all nine review images plus the room preview. `scripts/blender/make_astra_design_comparison.py` now takes an optional output name and both captions. `scripts/blender/create_astra_character_r1.py`'s `SKULL`, `FACE`, `EXPRESSIONS`, `facial_displacement` and `face_surface_y` are the single source of truth for the head; change a skull ring and its features move with it. `src/renderer/world/` and all application code are unchanged by this milestone.
+
+**Verification actually run:** the Blender script completed with `ASTRA_R1_COMPLETE` and `problems=0`; `npm run lint` clean; `npm test` 11/11 with production build; `node scripts/verify-desktop.mjs --allow-occluded` passed natively (PID 13024, exit 0); `node scripts/measure-world.mjs --allow-occluded` held 29.9–30.0 fps (p95 33.6–33.7 ms) in every state, matching the previous baseline. Every render was visually inspected and seven rounds of defects were found and fixed.
+
+**Watch out for:** facial features must be placed through `face_surface_y`, never by eye, or they float off the sculpted surface. Iris, pupil and glint spheres must sit **proud** of the eyeball surface — an early build placed them inside and they were invisible. The lip bulges must straddle the seam (`corner_z + 0.0042` and `corner_z - 0.0058`), never both below it. Fringe pieces must be lofted **bands**, not round strands, or they read as bars across the forehead. EEVEE uses a Standard view transform; AgX washes the palette out.
+
+**Outstanding:** Karl's visual approval, then and only then retopology to budget, the vertex groups listed in `LW02B_R1_CHARACTER_SPEC.md` §6, the armature, morph targets, clips, GLB export, integration and a measured performance run against the 30 fps baseline. Also still open: OS reduced-motion and offscreen acceptance runs, disconnected-network, soak and packaged-build tests, M1 offline acceptance.
+
+**Exact next recommended task:** Karl reviews `docs/review/lw02b-r1/`. **Do not begin LW-02C, rig the character, export a GLB or integrate it into the application.**
+
+## Historical LW-02B handover (2026-10-13; superseded above)
 
 Karl approved **visual character refinement only**. The LW-02A work was reviewed and committed locally as `3bf91b8` (branch is two commits ahead of `origin/main`); **nothing has been pushed**. LW-02A added a reviewed design proposal and a non-rigged Blender prototype; LW-02B replaced that prototype with a much better **refined blockout** and a written animation-readiness and GLB-export plan. The application is untouched: it still renders the labelled procedural mannequin. **Karl has not approved the character.** No rig, GLB, armature, skin weights, shape keys, animation clips, voice, memory, website research or autonomous behaviour exists.
 

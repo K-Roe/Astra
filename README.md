@@ -1,6 +1,6 @@
 # ASTRA
 
-A standalone, local-first Windows AI companion in development. LW-02B refines the full-body 3D character design to a 1.70 m, 5.76-head stylised Astra with a violet loose updo, expressive face, purple star hoodie, dark trousers and trainers, rendered as a **non-rigged design blockout awaiting Karl's visual approval**. The application itself still shows the labelled procedural mannequin next to current-session conversation with the locally installed Gemma 3 4B model. No production rig, GLB integration, voice, persistent memory, cloud services or computer control is implemented.
+A standalone, local-first Windows AI companion in development. LW-02B-R1 refines the full-body 3D character into a polished, expressive cartoon companion — a 1.70 m stylised young-adult woman with a sculpted face (real eye sockets, seated eyes, integrated lips), a loose violet updo with a side-swept fringe, a purple hoodie with a golden star, dark trousers and lavender trainers — rendered as a **design awaiting Karl's visual approval**. The application still shows the labelled procedural mannequin beside current-session conversation with the locally installed Gemma 3 4B model. No production rig, GLB integration, voice, persistent memory, cloud services or computer control is implemented.
 
 ## Requirements
 
@@ -36,21 +36,23 @@ npm run measure:world
 
 ## Character design
 
-`docs/LW02B_CHARACTER_SPEC.md` holds the refined appearance, proportion sheet, palette, the proposed glTF-named skeleton, facial controls, animation-readiness mapping and the Blender-to-GLB export plan. `docs/LW02A_CHARACTER_SPEC.md` is preserved as the superseded first pass. Both are **design proposals awaiting approval**; neither is a rig or a shipped asset.
+`docs/LW02B_R1_CHARACTER_SPEC.md` is the current character specification: sculpted-face construction, geometry and material statistics, the validation performed, the animation-readiness review and the geometry that will deform poorly. `docs/LW02B_CHARACTER_SPEC.md` and `docs/LW02A_CHARACTER_SPEC.md` are superseded and kept as history. All three are **design proposals awaiting approval**; none is a rig or a shipped asset.
 
-Generate the refined LW-02B blockout, its six review views, the in-room view and the editable `.blend` with local Blender:
-
-```powershell
-& 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' --background --factory-startup --python scripts/blender/create_astra_character_refined.py
-```
-
-Build the LW-02A versus LW-02B comparison sheet from any two character renders:
+Regenerate the current character, its nine review views, the room preview and the editable `.blend` with local Blender 5.2 LTS:
 
 ```powershell
-& 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' --background --factory-startup --python scripts/blender/make_astra_design_comparison.py -- docs/review/lw02a/astra-design-prototype-neutral-front.png docs/review/lw02b/astra-lw02b-front.png docs/review/lw02b
+& 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' --background --factory-startup --python scripts/blender/create_astra_character_r1.py
 ```
 
-The character script accepts an output folder after `--` and defaults to `test-results/lw02b/design`. Committed review images live in `docs/review/lw02a/` and `docs/review/lw02b/`; the superseded LW-02A blockout is still reproducible with `scripts/blender/create_astra_design_prototype.py`.
+The script takes an optional output folder after `--` (default `test-results/lw02b-r1/design`), prints its own triangle/object/material counts, character dimensions and validation result, and needs no add-ons, textures or simulation.
+
+Build a before/after comparison sheet from any two character renders:
+
+```powershell
+& 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' --background --factory-startup --python scripts/blender/make_astra_design_comparison.py -- <before.png> <after.png> <output_dir> [output_name] [left_caption] [right_caption]
+```
+
+Committed review images live in `docs/review/lw02a/`, `docs/review/lw02b/` and `docs/review/lw02b-r1/`. The superseded passes remain reproducible with `scripts/blender/create_astra_design_prototype.py` (LW-02A) and `scripts/blender/create_astra_character_refined.py` (LW-02B).
 
 ## Layout and continuity
 
