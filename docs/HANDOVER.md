@@ -1,6 +1,24 @@
 # Handover for the next AI agent
 
-## Current LW-01 handover (2026-10-13)
+## Current LW-02A handover (2026-10-13)
+
+Karl approved a **character design and 3D performance gate**. The app still renders the labelled procedural mannequin; the Blender work is a design proposal awaiting Karl's visual approval, not a production asset. Chat, the approved Gemma digest, Electron main/preload, CSP and the sandbox are unchanged. No rig, GLB integration, animation controller, room simulation, voice, memory, website research, autonomous tools or fine-tuning was added.
+
+**Repository state:** `main` is one commit ahead of `origin/main` at `eb6ebea` (LW-01 checkpoint). All LW-02A work is uncommitted in the working tree; nothing has been staged, committed or pushed. Preserve it. Read `AGENTS.md`, `MASTER_PLAN.md`, `CHECKLIST.md`, `CURRENT_STATE.md`, `DECISIONS.md`, this file, `ARCHITECTURE.md`, `LIVING_COMPANION_PLAN.md` and `LW02A_CHARACTER_SPEC.md` before changing anything, and inspect actual Git status and code.
+
+**Key result:** the LW-01 "10.9 fps during Gemma generation" was LW-01's own 12 fps cap, not a stall. A replay of that cap measures 10.70–10.79 fps; the 30 fps rAF candidate measures 30.0 fps average (33.6–33.8 ms p95) in idle, generating, finished, compact, restored and resumed states with about 0.3–0.4 ms render CPU per frame, 37 draw calls and 4,860 triangles. Minimize and manual pause render nothing.
+
+**Files/seams:** `src/shared/worldCamera.ts` (pure camera framing) and `src/shared/worldPerformance.ts` (frame-sample summary) are renderer-safe pure modules; `src/renderer/world/LivingWorldViewport.tsx` owns WebGL, the rAF loop, pause, resize, the reduced-motion check and the bounded diagnostic buffer; `src/renderer/world/scene.ts` builds procedural geometry only. `scripts/measure-world.mjs` records per-state performance and fallback behaviour; `scripts/verify-desktop.mjs` runs the native chat/security/layout acceptance and now supports `--allow-occluded`. `scripts/blender/create_astra_design_prototype.py` renders the design prototype. `tests/worldCamera.test.mjs` covers camera fit and frame summaries.
+
+**Verification:** `npm run lint` clean; `npm test` 11/11 with a production build; `node scripts/measure-world.mjs` passed natively including reduced-motion emulation pause/resume and the WebGL-disabled text fallback with chat still ready; `npm run verify:desktop` passed a full native run (PID 1596) with exit code 0 after the foreground focus helper was added; Blender re-ran reproducibly into a temporary folder. Full details and limits are in `CURRENT_STATE.md`.
+
+**Watch out for:** the reduced-motion check must read `matchMedia` fresh. A cached `MediaQueryList` silently stayed stale under media emulation and the scene kept rendering; a 300 ms watchdog now re-synchronizes state. On this machine the strict verifier can fail because Chromium reports the app hidden while another window holds foreground; `focusWindow` was added to help, and `--allow-occluded` records the visibility method it used rather than weakening the assertion.
+
+**Outstanding:** Karl's visual approval of the character direction; OS-level reduced-motion and offscreen acceptance runs; a real skinned/animated GLB for any meaningful performance or budget claim; disconnected-network, soak and packaged-build tests; M1 offline acceptance.
+
+**Exact next recommended task:** Karl reviews the five renders in `docs/review/lw02a/`, the desktop/compact screenshots and `docs/LW02A_CHARACTER_SPEC.md`, then approves or revises the appearance. **Stop at LW-02A and request that approval before starting LW-02B.**
+
+## Historical LW-01 handover (2026-10-13; superseded above)
 
 Karl approved and LW-01 implements a **local procedural 3D proof of concept only**. The prior CSS portrait is replaced inside `AvatarPanel` by a lazy-loaded Three.js viewport, procedural room, fixed camera and temporary full-body articulated mannequin. It is clearly labelled a placeholder. The scene owns its WebGL/timer/observer lifecycle, targets 12 idle frames per second, has a manual pause control, stops when the document is hidden/minimized or viewport offscreen, and respects reduced-motion preference. Chat, Gemma identity, Electron main/preload, CSP and security boundaries remain intact. No final artwork, production rig, room simulation, voice, memory, website access, tools or fine-tuning was added.
 

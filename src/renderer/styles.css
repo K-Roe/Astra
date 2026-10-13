@@ -82,7 +82,7 @@ h1 { margin: 0; font-size: 1.52rem; font-weight: 800; letter-spacing: .23em; lin
   .workspace-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: 160px minmax(0, 1fr); }
   .avatar-panel { flex-direction: row; border-right: 0; border-bottom: 1px solid #80619f55; }
   .avatar-panel-top { position: absolute; left: 0; top: 0; width: 100%; padding: 11px 15px; }
-  .avatar-stage { flex: 0 0 32%; min-height: 0; }
+  .avatar-stage { flex: 0 0 38%; min-height: 0; }
   .avatar-panel-bottom { flex: 1; align-self: end; padding: 22px 15px 10px 0; background: transparent; }
   .placeholder-label { margin-bottom: 4px; font-size: .5rem; }.avatar-panel-bottom h2 { font-size: 1.7rem; }.avatar-tagline { display: none; }.avatar-presence { margin-top: 7px; padding: 7px; }.avatar-presence div span { display: none; }.avatar-connection { display: none; }
   .conversation-header { padding: 12px 17px; }.conversation-header h2 { margin-top: 3px; font-size: 1.1rem; }
@@ -92,7 +92,7 @@ h1 { margin: 0; font-size: 1.52rem; font-weight: 800; letter-spacing: .23em; lin
 @media (max-height: 650px) and (min-width: 821px) { .avatar-panel-bottom { padding-top: 9px; padding-bottom: 12px; }.avatar-stage { min-height: 135px; }.avatar-tagline { margin-bottom: 9px; }.avatar-presence { padding: 7px 10px; } }
 @media (max-height: 500px) and (max-width: 820px) {
   .app-header { flex-basis: 46px; }.brand-kicker { display: none; }
-  .workspace-grid { grid-template-rows: 105px minmax(0, 1fr); }
+  .workspace-grid { grid-template-rows: 125px minmax(0, 1fr); }
   .avatar-panel-top .panel-index { display: none; }
   .avatar-panel-bottom { padding-top: 20px; padding-bottom: 4px; }
   .avatar-panel-bottom h2 { font-size: 1.35rem; }

@@ -1,10 +1,21 @@
 # Living Companion implementation plan
 
-Current authorization: **LW-01 local 3D proof of concept**, superseding the V0.2 CSS portrait as the current placeholder. The React layout and a temporary procedural full-body mannequin in a basic room are implemented. No final artwork, production rig, animation engine, microphone, speech engine or lip-sync exists. Each later stage requires Karl's separate approval and must preserve the local Ollama chat and Electron security boundary. The original 2D layered-art suggestions below are historical proposals; Karl's newer full-body 3D vision requires a separately approved 3D character/rig specification before Phase 02 work.
+Current authorization: **LW-02A character design and 3D performance gate**, superseding LW-01 as the current working state. The React layout, the procedural full-body mannequin in a basic room, a measured 30 fps render budget, dimension-driven desktop/compact camera framing and a non-rigged Blender design prototype with five review renders are implemented. No production rig, GLB integration, animation engine, room simulation, microphone, speech engine or lip-sync exists. Each later stage requires Karl's separate approval and must preserve the local Ollama chat and Electron security boundary. The original 2D layered-art suggestions below are historical proposals; Karl's full-body 3D direction is now captured in `LW02A_CHARACTER_SPEC.md`.
 
-## LW-01 — local 3D proof of concept (implemented; verification in CURRENT_STATE.md)
+## LW-02A — character design and 3D performance gate (implemented; verification in CURRENT_STATE.md)
 
-Direct Three.js inside `AvatarPanel` renders an isolated procedural room and labelled mannequin, with a fixed camera and simple idle joint motion. It caps idle rendering, pauses on manual/hidden/offscreen state and respects reduced-motion preference. This is technical validation only; it adds no room behavior, final character design, voice or memory. The next character stage should specify a versioned local 3D model and articulated/facial rig, asset rights, expressions, animation clips, compact readability and performance targets before implementation.
+- Measured why the LW-01 scene reported about 10.9 fps during Gemma generation: LW-01's own 12 fps `setTimeout` cap, not a renderer stall. A controlled replay of that cap measures about 10.75 fps, while `renderer.render` uses roughly 0.4 ms CPU per frame.
+- Replaced that cap with a 30 fps `requestAnimationFrame` budget with the same stop conditions. Idle, generating, finished, compact, restored and resumed samples all hold 30 fps; minimized and manual pause render nothing.
+- Replaced the fixed camera with a pure dimension-based framing function so the full body fits desktop and compact panels, with restrained camera interpolation on resize and a slightly larger compact viewport.
+- Verified resize, minimize/restore, manual pause, reduced-motion emulation and the WebGL-unavailable text fallback with chat still usable.
+- Wrote `LW02A_CHARACTER_SPEC.md`: proportion and turnaround sheet, palette, Blender-to-GLB asset contract, proposed skeleton, facial controls, minimum expression and mouth-shape sets, candidate clip list and provisional review budgets.
+- Built a non-rigged design blockout with Blender and five review renders. This is design evidence for Karl, not approved art, a rig or a replacement for the mannequin.
+
+**Boundary:** Karl's visual approval of the character direction is required before LW-02B. Do not model a production rig, integrate a GLB, add animation controllers, room simulation, voice, memory, website research or autonomous actions under LW-02A authority.
+
+## LW-01 — local 3D proof of concept (implemented; superseded above)
+
+Direct Three.js inside `AvatarPanel` renders an isolated procedural room and labelled mannequin, with a fixed camera and simple idle joint motion. It caps idle rendering, pauses on manual/hidden/offscreen state and respects reduced-motion preference. This is technical validation only; it adds no room behavior, final character design, voice or memory. The next character stage should specify a versioned local 3D model and articulated/facial rig, asset rights, expressions, animation clips, compact readability and performance targets before implementation. That specification now exists as `LW02A_CHARACTER_SPEC.md`.
 
 ## Phase 01 — character-first interface (implemented and verified 2026-10-13)
 

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { worldCameraFraming } from '../../shared/worldCamera';
 
 export interface LivingWorldScene {
   readonly scene: THREE.Scene;
@@ -39,9 +40,10 @@ function limb(parent: THREE.Group, x: number, y: number, side: number, sleeve: T
 export function createLivingWorldScene(): LivingWorldScene {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#21172f');
-  const camera = new THREE.PerspectiveCamera(39, 1, 0.1, 30);
-  camera.position.set(4.3, 3.1, 7.5);
-  camera.lookAt(0, 1.55, 0);
+  const initialFraming = worldCameraFraming(343, 261);
+  const camera = new THREE.PerspectiveCamera(initialFraming.fovDegrees, initialFraming.aspect, 0.1, 30);
+  camera.position.set(...initialFraming.position);
+  camera.lookAt(...initialFraming.target);
 
   const wall = new THREE.MeshStandardMaterial({ color: '#473258', roughness: 1 });
   const sideWall = new THREE.MeshStandardMaterial({ color: '#382b4e', roughness: 1 });
