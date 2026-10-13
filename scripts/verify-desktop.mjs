@@ -3,6 +3,8 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
+import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import electron from 'electron';
@@ -85,6 +87,58 @@ function resizeWindow(handle, width, height) {
   assert.equal(output, 'True', `Could not resize native window to ${width}x${height}`);
 }
 
+function showWindow(handle, command) {
+  const script = `$signature='[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);'; Add-Type -Name NativeVisibility -Namespace AstraTest -MemberDefinition $signature; [AstraTest.NativeVisibility]::ShowWindow([IntPtr]${handle}, ${command})`;
+  execFileSync('powershell.exe', ['-NoProfile', '-Command', script], { encoding: 'utf8' });
+}
+
+async function worldSnapshot(page) {
+  const result = await page.send('Runtime.evaluate', {
+    expression: "JSON.stringify((()=>{const v=document.querySelector('.world-viewport');const c=v?.querySelector('canvas');return {state:v?.dataset.worldState,frames:Number(v?.dataset.frameCount),fps:Number(v?.dataset.fps),canvasWidth:c?.width,canvasHeight:c?.height,hidden:document.hidden,chatPhase:document.querySelector('.status')?.innerText,placeholder:document.querySelector('.placeholder-label')?.innerText}})())",
+    returnByValue: true,
+  });
+  return JSON.parse(result.result.value);
+}
+
+function nativeWindowState(handle) {
+  const script = `$signature='[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd); [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd); [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();'; Add-Type -Name NativeState -Namespace AstraTest -MemberDefinition $signature; [pscustomobject]@{ visible=[AstraTest.NativeState]::IsWindowVisible([IntPtr]${handle}); iconic=[AstraTest.NativeState]::IsIconic([IntPtr]${handle}); foreground=[AstraTest.NativeState]::GetForegroundWindow().ToInt64() } | ConvertTo-Json -Compress`;
+  return JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-Command', script], { encoding: 'utf8' }));
+}
+
+async function waitForWorldRunning(page, handle) {
+  const deadline = Date.now() + 10000;
+  let observed;
+  while (Date.now() < deadline) {
+    observed = await worldSnapshot(page);
+    if (observed.state === 'running' && observed.canvasWidth > 100) return observed;
+    await delay(100);
+  }
+  throw new Error(`3D scene did not become visible: ${JSON.stringify({ observed, native: nativeWindowState(handle) })}`);
+}
+
+function cpuSnapshot() {
+  return os.cpus().reduce((sum, core) => {
+    const times = core.times;
+    sum.idle += times.idle;
+    sum.total += times.user + times.nice + times.sys + times.idle + times.irq;
+    return sum;
+  }, { idle: 0, total: 0 });
+}
+
+function sampleResources(pid) {
+  let gpu = null;
+  try {
+    const raw = execFileSync('nvidia-smi', ['--query-gpu=utilization.gpu,memory.used,memory.free', '--format=csv,noheader,nounits'], { encoding: 'utf8' }).trim().split(',');
+    gpu = { utilizationPercent: Number(raw[0]), usedMiB: Number(raw[1]), freeMiB: Number(raw[2]), scope: 'whole NVIDIA GPU; includes Ollama and other applications' };
+  } catch { /* NVIDIA telemetry may be unavailable. */ }
+  let electron = null;
+  try {
+    const script = `$all=Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,WorkingSetSize; $ids=@(${pid}); do { $next=@($all | Where-Object { $ids -contains $_.ParentProcessId -and $ids -notcontains $_.ProcessId } | ForEach-Object ProcessId); $ids+= $next } while ($next.Count -gt 0); $procs=@(Get-Process -Id $ids -ErrorAction SilentlyContinue); [pscustomobject]@{ count=$procs.Count; workingSetMiB=[math]::Round((($procs | Measure-Object WorkingSet64 -Sum).Sum / 1MB),1); cpuSeconds=[math]::Round((($procs | Measure-Object CPU -Sum).Sum),2) } | ConvertTo-Json -Compress`;
+    electron = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-Command', script], { encoding: 'utf8' }));
+  } catch { /* Process telemetry may be unavailable. */ }
+  return { timestamp: new Date().toISOString(), systemFreeRamMiB: Math.round(os.freemem() / 1048576), gpu, electron };
+}
+
 async function waitForRenderer(page) {
   const deadline = Date.now() + 15000;
   let lastResult;
@@ -150,7 +204,7 @@ async function inspectLayout(page, compact) {
   assert(layout.avatar.width > 100 && layout.avatar.height > 100, 'Avatar panel collapsed');
   assert(layout.chat.width > 250 && layout.chat.height > 200, 'Conversation panel collapsed');
   assert(layout.composer.y + layout.composer.height <= layout.height + 1, 'Composer is clipped');
-  assert.match(layout.placeholder, /Temporary character placeholder/i);
+  assert.match(layout.placeholder, /Temporary 3D mannequin placeholder/i);
   assert.deepEqual(layout.voice.map(({ text, disabled }) => ({ text, disabled })), [{ text: 'Mic unavailable', disabled: true }, { text: 'Audio unavailable', disabled: true }]);
   assert(layout.voice.every((button) => button.bottom <= layout.height + 1), 'Reserved voice controls are clipped');
   assert.equal(layout.presentation, 'idle');
@@ -234,11 +288,51 @@ async function main() {
     assert.equal(observed.nodeProcess, 'undefined');
     assert.match(observed.csp, /connect-src 'none'/);
     await inspectLayout(page, false);
+    const handle = getMainWindowHandle(child.pid);
+    assert(handle > 0, `No native Windows main window handle for PID ${child.pid}`);
+    showWindow(handle, 9); // Ensure a restored window before measuring visible frames.
+    let world = await waitForWorldRunning(page, handle);
+    assert(world.canvasWidth > 100 && world.canvasHeight > 100, '3D canvas has no drawable size');
+    const initialFrames = world.frames;
+    const idleCpuStart = cpuSnapshot();
+    await delay(1400);
+    const idleCpuEnd = cpuSnapshot();
+    world = await worldSnapshot(page);
+    assert(world.frames > initialFrames + 3, 'Idle mannequin did not render successive frames');
+    assert(world.fps > 0 && world.fps <= 18, `Idle frame rate was not capped: ${JSON.stringify(world)}`);
+    const idleMetrics = { world, resources: sampleResources(child.pid), systemCpuPercent: Math.round(100 * (1 - (idleCpuEnd.idle - idleCpuStart.idle) / (idleCpuEnd.total - idleCpuStart.total))) };
+    await page.send('Runtime.evaluate', { expression: "document.querySelector('.world-pause').click()" });
+    await delay(200);
+    const paused = await worldSnapshot(page);
+    assert.equal(paused.state, 'manual');
+    await delay(450);
+    assert.equal((await worldSnapshot(page)).frames, paused.frames, 'Manual pause continued rendering');
+    await page.send('Runtime.evaluate', { expression: "document.querySelector('.world-pause').click()" });
+    await delay(250);
+    assert((await worldSnapshot(page)).frames > paused.frames, 'Scene did not resume');
+    showWindow(handle, 6); // SW_MINIMIZE
+    await delay(500);
+    const minimized = await worldSnapshot(page);
+    assert.equal(minimized.state, 'hidden', `Minimized scene was not hidden: ${JSON.stringify(minimized)}`);
+    await delay(400);
+    assert.equal((await worldSnapshot(page)).frames, minimized.frames, 'Minimized scene continued rendering');
+    showWindow(handle, 9); // SW_RESTORE
+    await delay(400);
+    assert.equal((await worldSnapshot(page)).state, 'running', 'Restored scene did not resume');
 
-    await sendUiMessage(page, 'For this session, my test word is violet. Acknowledge it briefly.');
+    const firstReplyStart = performance.now();
+    await sendUiMessage(page, 'For this session, my test word is violet. Acknowledge it, then give four concise sentences about local-first software and honest memory boundaries.');
     const thinking = await page.send('Runtime.evaluate', { expression: "document.querySelector('.avatar-panel')?.dataset.presentationState", returnByValue: true });
     assert.equal(thinking.result.value, 'thinking', 'Avatar did not reflect active local generation');
+    const generatingStartFrames = (await worldSnapshot(page)).frames;
+    const generatingCpuStart = cpuSnapshot();
+    await delay(1200);
+    const generatingCpuEnd = cpuSnapshot();
+    const generatingWorld = await worldSnapshot(page);
+    assert(generatingWorld.frames > generatingStartFrames, '3D scene stopped responding while Gemma generated');
+    const generatingMetrics = { world: generatingWorld, resources: sampleResources(child.pid), systemCpuPercent: Math.round(100 * (1 - (generatingCpuEnd.idle - generatingCpuStart.idle) / (generatingCpuEnd.total - generatingCpuStart.total))), elapsedMs: 1200 };
     await waitForAssistantCount(page, 1);
+    const firstReplyLatencyMs = Math.round(performance.now() - firstReplyStart);
     await sendUiMessage(page, 'What test word did I just tell you?');
     const answers = await waitForAssistantCount(page, 2);
     assert.match(answers[1], /violet/i, 'Second reply did not use current-session context');
@@ -256,9 +350,7 @@ async function main() {
     assert(held.top < 72 && held.jump, 'New reply moved transcript away from the older messages');
     await page.send('Runtime.evaluate', { expression: "document.querySelector('.jump-latest').click()" });
     await delay(100);
-    const screenshotPath = await capture(page, 'astra-living-desktop.png');
-    const handle = getMainWindowHandle(child.pid);
-    assert(handle > 0, `No native Windows main window handle for PID ${child.pid}`);
+    const screenshotPath = await capture(page, 'astra-lw01-desktop.png');
     resizeWindow(handle, 700, 560);
     await delay(400);
     await inspectLayout(page, true);
@@ -267,7 +359,7 @@ async function main() {
     await inspectLayout(page, true);
     const jumpAfterResize = await page.send('Runtime.evaluate', { expression: "Boolean(document.querySelector('.jump-latest'))", returnByValue: true });
     assert.equal(jumpAfterResize.result.value, false, 'Follow-latest state was lost during resize');
-    const compactScreenshotPath = await capture(page, 'astra-living-compact.png');
+    const compactScreenshotPath = await capture(page, 'astra-lw01-compact.png');
     const cleared = await page.send('Runtime.evaluate', {
       expression: "(async () => { document.querySelectorAll('button').forEach(button => { if (button.innerText === 'Clear conversation') button.click(); }); await new Promise(resolve => setTimeout(resolve, 500)); return JSON.stringify({messages:document.querySelectorAll('.message').length,bridgeMessages:(await window.astra.getChatStatus()).messages.length}); })()",
       awaitPromise: true,
@@ -275,9 +367,13 @@ async function main() {
     });
     assert.deepEqual(JSON.parse(cleared.result.value), { messages: 0, bridgeMessages: 0 });
     assert.equal(rendererEvents.filter((event) => event.method === 'Runtime.exceptionThrown' || (event.method === 'Runtime.consoleAPICalled' && event.params.type === 'error')).length, 0, `Renderer errors: ${JSON.stringify(rendererEvents)}`);
+    await mkdir(evidenceDir, { recursive: true });
+    const metricsPath = path.join(evidenceDir, 'astra-lw01-performance.json');
+    await writeFile(metricsPath, JSON.stringify({ methodology: '12 fps capped renderer frame counter and one 1.4s idle / 1.2s first-chat CPU interval; os.cpus and free RAM are system-wide, nvidia-smi is whole GPU, Electron process tree is app-only; samples are snapshots, not attribution of GPU memory to 3D', firstReplyLatencyMs, idle: idleMetrics, firstChatWindow: generatingMetrics }, null, 2));
 
-    console.log(`PASS: native window PID ${child.pid}, handle ${handle}; local renderer, live four-turn chat, scroll behavior, reset, desktop/compact layout and restricted bridge verified`);
+    console.log(`PASS: native window PID ${child.pid}, handle ${handle}; 3D canvas and capped idle frames, manual/minimized pause, live four-turn chat, scroll behavior, reset, desktop/compact layout and restricted bridge verified`);
     console.log(`Screenshots: ${screenshotPath}; ${compactScreenshotPath}`);
+    console.log(`Performance: ${metricsPath}`);
 
     const closed = await browser.send('Target.closeTarget', { targetId: target.id });
     assert.equal(closed.success, true);

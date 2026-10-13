@@ -1,6 +1,10 @@
 # Living Companion implementation plan
 
-Current authorization: **V0.2 Phase 01 UI structure and avatar preparation only**. The React layout and temporary code-native avatar placeholder are implemented. No final artwork, rig, animation engine, microphone, speech engine or lip-sync exists. Each later stage requires Karl's separate approval and must preserve the local Ollama chat and Electron security boundary.
+Current authorization: **LW-01 local 3D proof of concept**, superseding the V0.2 CSS portrait as the current placeholder. The React layout and a temporary procedural full-body mannequin in a basic room are implemented. No final artwork, production rig, animation engine, microphone, speech engine or lip-sync exists. Each later stage requires Karl's separate approval and must preserve the local Ollama chat and Electron security boundary. The original 2D layered-art suggestions below are historical proposals; Karl's newer full-body 3D vision requires a separately approved 3D character/rig specification before Phase 02 work.
+
+## LW-01 — local 3D proof of concept (implemented; verification in CURRENT_STATE.md)
+
+Direct Three.js inside `AvatarPanel` renders an isolated procedural room and labelled mannequin, with a fixed camera and simple idle joint motion. It caps idle rendering, pauses on manual/hidden/offscreen state and respects reduced-motion preference. This is technical validation only; it adds no room behavior, final character design, voice or memory. The next character stage should specify a versioned local 3D model and articulated/facial rig, asset rights, expressions, animation clips, compact readability and performance targets before implementation.
 
 ## Phase 01 — character-first interface (implemented and verified 2026-10-13)
 

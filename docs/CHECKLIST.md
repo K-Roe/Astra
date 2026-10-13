@@ -40,6 +40,16 @@ Status meanings: `[x]` verified by the stated check; `[ ]` pending. A checked de
 - [ ] Phase 05 offline speech recognition. Check: approved local STT works disconnected with explicit microphone permission, denial/revocation and correction flow.
 - [ ] Phase 06 lip-sync and expressions. Check: inspected synchronization to actual audio timing, neutral fallback, cancellation and performance evidence.
 
+## LW-01 Living World proof of concept
+
+- [x] Compare React Three Fiber with direct Three.js and record a scoped choice. Check: ADR-013 reviews both against this single noninteractive viewport and selects direct Three.js; official library documentation reviewed 2026-10-13.
+- [x] Local 3D room, camera and labelled full-body mannequin in the existing avatar area. Check: native Windows screenshots `test-results/astra-lw01-desktop.png` and `astra-lw01-compact.png` captured and visually inspected on 2026-10-13; scene is procedural in `src/renderer/world/scene.ts` with no remote assets.
+- [x] Idle movement, capped rendering, manual/visibility pause and resize. Check: joint-update code inspected; `npm run verify:desktop` observed successive rendered frames, an idle FPS cap, zero new frames after manual pause and actual Windows minimize, resumption after restore, drawable canvas and compact native resize at 700×560 and 640×480 (2026-10-13). Reduced-motion logic is implemented but no OS-setting acceptance test was run. A later rerun could not start visible-frame measurement because Chromium reported the Win32-visible window as hidden while another window held foreground; see `CURRENT_STATE.md`.
+- [x] Preserve local Gemma conversation and desktop security. Check: `npm test` passed 9/9 and native verifier passed four-turn local chat, session context, reset, restricted bridge/CSP, no renderer errors and exit code 0 (2026-10-13). No main/preload/ChatService change.
+- [x] Measure target-machine responsiveness with Gemma. Check: ignored `test-results/astra-lw01-performance.json` records 12 fps target, observed frame counts/FPS, whole-GPU `nvidia-smi`, system CPU/free RAM and Electron process-tree working set during idle and first chat; frame count advanced during the response. Samples are brief and cannot attribute GPU memory to the viewport.
+- [x] Document future service boundaries without implementing them. Check: `ARCHITECTURE.md` and ADR-014 cover character/animation, room simulation, offline voice, empty SQLite memory/journal, approved-site research protections and measurable learning; fine-tuning is separate and unapproved.
+- [ ] Full Living World character/world acceptance. Check: Karl approves final 3D design and rig, interaction/animation requirements and sustained performance tests in separately scoped milestones. LW-01 proves only a temporary procedural scene.
+
 ## M2 memory
 
 - [ ] SQLite profile created empty outside source tree. Check: fresh-profile query returns zero personal records.

@@ -1,12 +1,13 @@
 # Project ASTRA architecture
 
-The Electron desktop shell, first session-only Ollama conversation and V0.2 Living Companion UI structure are implemented. Persistent memory, tool and voice services remain planned; they do not exist yet.
+The Electron desktop shell, session-only Ollama conversation and LW-01 procedural 3D viewport are implemented. Persistent memory, tools, voice and website research remain planned; they do not exist yet.
 
 ## Boundaries and data flow
 
 ```text
 React renderer (chat UI, no direct Node/network access)
-    |-- AvatarPanel <- typed presentation state from chat phase (no service access)
+    |-- AvatarPanel -> lazy local LivingWorldViewport -> procedural Three.js scene
+    |                  <- typed presentation state from chat phase (no service access)
     |-- Conversation panel <- session messages, safe text/code formatter
     | typed app-info, status, send and clear requests via bundled sandboxed preload
 Electron main (window lifecycle, sender-validated IPC and permissions)
@@ -20,7 +21,18 @@ Electron main owns OS access and process lifecycle. It loads `dist/renderer/inde
 
 `ChatService` keeps user and assistant turns in main-process memory. On each send it verifies the installed `gemma3:4b` tag and llama.cpp default, sends the authored personality plus current-session turns to the fixed loopback Ollama endpoint at 4,096 context, then verifies the loaded runtime digest before accepting the reply. It accepts one generation at a time; clear aborts the active request and invalidates stale results. Missing service/model and changed identity return user-visible errors without fallback. There is no cloud API, transcript file or telemetry. A restarted process begins with empty history. Ollama may truncate older turns once they exceed the model's context window; long-session context behavior has not yet been measured.
 
-The Living Companion renderer uses a two-panel layout that stacks at compact window widths. `src/renderer/presentationState.ts` maps connecting/ready to idle, generating to thinking, and chat failures to error. Listening and speaking exist only in the type contract and cannot be reached from today's chat flow. `AvatarPanel` owns the temporary CSS character placeholder and visual status; it does not import `ChatService`, call Ollama or receive conversation text. The conversation panel keeps the existing narrow bridge, formats fenced code as escaped text, and follows new messages only while the user is near the bottom. Disabled microphone and audio buttons reserve layout space without requesting permissions. Future avatar assets, animation and voice stages are specified in `LIVING_COMPANION_PLAN.md` and remain unimplemented.
+The Living Companion renderer uses a two-panel layout that stacks at compact window widths. `src/renderer/presentationState.ts` maps connecting/ready to idle, generating to thinking, and chat failures to error. Listening and speaking exist only in the type contract and cannot be reached from today's chat flow. `AvatarPanel` owns visual status and the LW-01 viewport boundary; it does not import `ChatService`, call Ollama or receive conversation text. The conversation panel keeps the existing narrow bridge, formats fenced code as escaped text, and follows new messages only while the user is near the bottom. Disabled microphone and audio buttons reserve layout space without requesting permissions.
+
+`src/renderer/world/scene.ts` constructs a local procedural room and full-body articulated mannequin with a fixed camera, then exposes only `updateIdle` and `dispose`. `LivingWorldViewport.tsx` owns the WebGL renderer, canvas, resize/visibility observers and manual pause. A timer targets 12 rendered frames per second for idle motion; manual pause, hidden/minimized/offscreen state and reduced-motion preference stop the timer. Resize can still draw one frame to keep the picture sized correctly. The viewport is lazy loaded from the local Vite build and receives no chat text, Ollama reference, Node API, IPC or remote asset URL. A WebGL failure shows a text fallback while chat stays usable. The mannequin is temporary geometry, not the approved final appearance or a reusable rig. No room interaction, world simulation or AI-driven animation exists yet.
+
+## Planned Living World boundaries — no implementation in LW-01
+
+- **Character and animation:** A separately approved local asset pipeline should define versioned 3D rig, bones, facial controls, expressions and animation clips. A controller should consume typed, verified presentation events and own transitions/cancellation. Listening and speaking states only become reachable when corresponding input/output is real. Provide reduced-motion and missing-asset fallback.
+- **Virtual room:** A simulation service should own room entities, activity rules and time progression separately from rendering. Any activity that affects files, networks or OS state requires its own explicit permission path. Rendering a room does not imply autonomous behavior.
+- **Offline voice:** Main-process adapters should isolate approved local TTS/STT engines and model files outside the repository. Microphone capture needs Karl-visible permission, activation, stop and revocation; audio output needs mute/cancel and truthful speaking state. No microphone or audio API is enabled by LW-01.
+- **Memory and experience journal:** A future SQLite service should begin with an empty personal store outside Git, then offer inspect, correct, delete, export and restore. Experiences and source provenance should be explicit records with retention controls, not implicit changes to model weights. A response must not claim cross-session recall before this exists.
+- **Approved-website research:** A future optional main-process service requires Karl's explicit approval for each domain/scope and must remain disabled by default. Allowlist canonical HTTPS domains and read-only methods; reject arbitrary URLs, credentials in URLs, nonapproved ports, private/loopback/link-local/metadata addresses and local files. Resolve DNS before connecting and after redirects, revalidate every redirect target and address, and prevent rebinding or proxy bypass. Treat pages as untrusted data: no page text can issue tool instructions, change permissions or become a system prompt. Bound redirects, response bytes, content types, request count, time, rate and total session budget; expose source/consent and local cache/retention controls. These are design requirements, not a web capability today.
+- **Learning evaluation:** Define measurable task suites for recall accuracy, correction fidelity, conversation quality and coding reliability before adaptation. Separate persistent knowledge retrieval and approved behavioral rule changes from neural-network fine-tuning. Fine-tuning needs separately approved data rights, compute budget, held-out evaluation and rollback.
 
 ## Memory and portability
 
@@ -35,7 +47,7 @@ User input, retrieved files, model responses and future tool output are untruste
 ```text
 src/main/       Electron main, window options, IPC handler and ChatService
 src/preload/    sandbox-compatible bundled context bridge
-src/renderer/   React chat UI, AvatarPanel, presentation state and CSP
+src/renderer/   React chat UI, AvatarPanel, local world viewport/scene, presentation state and CSP
 src/shared/     typed IPC contracts and safe message-block parser
 tests/          foundation, chat-service and formatting checks
 scripts/        benchmark and Windows live-chat/resize/shutdown verification
