@@ -69,6 +69,19 @@ test('a scheduler reset forgets its history', () => {
   assert.equal(scheduler.getOptions().enabled, true);
 });
 
+test('idle cannot remain motionless through three full decision intervals', () => {
+  const scheduler = new IdleScheduler({
+    ...DEFAULT_IDLE_OPTIONS,
+    activityChance: 0,
+    seatDestinations: ['sofa_seat'],
+    random: () => 0.9,
+  });
+  const decisions = [scheduler.decide({ x: 0, z: 0 }), scheduler.decide({ x: 0, z: 0 }), scheduler.decide({ x: 0, z: 0 })];
+  assert.equal(decisions[0].held, true);
+  assert.equal(decisions[1].held, true);
+  assert.equal(decisions[2].activity.kind, 'walk');
+});
+
 test('sitting is only ever proposed at a registered seat', () => {
   const seats = ['desk_seat', 'sofa_seat'];
   const scheduler = new IdleScheduler({

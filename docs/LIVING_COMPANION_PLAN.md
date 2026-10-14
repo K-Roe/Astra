@@ -1,5 +1,7 @@
 # Living Companion implementation plan
 
+**Current status (2026-10-14):** LW-03 is authorised and PARTIAL; see `docs/LW_03.md` for the current home, V2 preview and evidence. The historical LW-02B-R1 plan below records its own earlier stage and is superseded for current implementation authority. V1 is the approved runtime default pending Karl's review of V2 against the missing reference image.
+
 Current authorization: **LW-02B-R1 complete character refinement**, superseding LW-02B as the current working state. The React layout, the procedural full-body mannequin, the measured 30 fps scene budget and the dimension-driven desktop/compact camera framing remain implemented and unchanged. LW-02B-R1 replaces the character's face with a **single sculpted mesh** (real eye sockets, brow ridge, nose, integrated lips, cheekbones and chin) with eyeballs seated in those sockets, rebuilds the hair as overlapping soft masses with a gathered updo and side-swept fringe, and polishes the shoulders, hood, pocket, trousers and trainers. Ten review renders and a comparison sheet are in `docs/review/lw02b-r1/`; the specification is `docs/LW02B_R1_CHARACTER_SPEC.md`. There is still **no production rig, no GLB, no asset loader, no animation controller, no room simulation, no microphone, no speech engine and no lip-sync**, and **Karl has not approved the character**. Every later stage requires Karl's separate approval and must preserve the local Ollama chat and Electron security boundary.
 
 ## LW-02B-R1 — complete character refinement (implemented; awaiting Karl's approval)

@@ -9,7 +9,7 @@ export const CHARACTER_ASSET_CHANNEL = 'astra:character-asset' as const;
  * Bundled character assets the renderer may request. The renderer cannot pass a
  * path: it names an asset and the main process resolves the built file itself.
  */
-export const CHARACTER_ASSET_IDS = ['astra-character-v1'] as const;
+export const CHARACTER_ASSET_IDS = ['astra-character-v1', 'astra-character-v2'] as const;
 export type CharacterAssetId = (typeof CHARACTER_ASSET_IDS)[number];
 
 export interface AppInfo {

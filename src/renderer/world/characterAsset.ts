@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { CHARACTER_MORPHS } from '../../shared/characterClips';
+import { CHARACTER_MORPHS, missingRequiredCharacterClips } from '../../shared/characterClips';
 import type { CharacterAssetId } from '../../shared/contracts';
 
 /** A rigged, animated character loaded from a local GLB. */
@@ -61,6 +61,8 @@ function buildAsset(gltf: { scene: THREE.Group; animations: THREE.AnimationClip[
   const mixer = new THREE.AnimationMixer(gltf.scene);
   const clips = new Map<string, THREE.AnimationClip>();
   for (const clip of gltf.animations) clips.set(clip.name, clip);
+  const missing = missingRequiredCharacterClips(clips.keys());
+  if (missing.length) throw new Error(`character asset is missing required animation clips: ${missing.join(', ')}`);
 
   const morphMeshes: { mesh: THREE.Mesh; indices: Map<string, number> }[] = [];
   gltf.scene.traverse((child) => {

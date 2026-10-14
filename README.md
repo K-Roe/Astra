@@ -1,5 +1,7 @@
 # ASTRA
 
+**LW-03 preview (2026-10-14):** The existing Three.js panel now contains a connected living, work, kitchen and bedroom space, with activity-driven desk behaviour. A separate brunette V2 rig can be selected as a preview; the approved V1 remains default until Karl reviews V2 against his reference. See [LW-03 status and evidence](docs/LW_03.md). Full native behaviour and visual acceptance remain open.
+
 A standalone, local-first Windows AI companion. Astra runs a **rigged 3D character** in a room, **learns from documentation sites Karl approves**, **remembers things including corrections**, answers **with real citations** and admits when it does not know, and can **inspect and edit repositories** under `C:\Users\karlr\repos` through approval-gated, audited tools.
 
 **CA-01 status (2026-10-14): COMPLETE.** Astra can take a coding request in normal chat, inspect a selected local Git repository, propose a validated patch, request approval, edit, run an approved test and show a Git diff. She can also create an approved React/TypeScript scaffold and local Git repository. A disposable native chat run repaired a genuine failed test with a fresh approval for the correction. Interrupted tests require fresh approval after restart. Native malformed-model-response fault injection failed closed. Partially applied work requires manual review. Dependency installation is blocked, so the scaffold has not been built. See [CA-01 architecture and verified limits](docs/CA_01.md).

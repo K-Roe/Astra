@@ -2,6 +2,8 @@
 
 ## Goal and constraints
 
+**LW-03 continuation, 2026-10-14: PARTIAL.** Karl approved a connected home, activity-driven character behaviour and a separate rigged brunette V2. The home/activity implementation and V2 preview are documented in `docs/LW_03.md`. V1 remains the default because the approved reference image and Karl's V2 visual approval are outstanding. Native behaviour and performance acceptance ran on 2026-10-14: CA-01/LW-03 native 82/82, the idle sofa lifecycle pass, and 29.7-30.0 fps with a 392.5-535.8 MiB working set across every mode. Visual acceptance is still outstanding, so this milestone must not be marked complete from asset/build checks alone. CA-01 and Intelligence V1 remain unchanged in authority. Do not start CA-02 or another living-world milestone.
+
 **CA-01 continuation, 2026-10-14: COMPLETE.** The approved chat-to-code path and verification record are in `docs/CA_01.md`. Live failed-test correction, cancellation, restart recovery, scaffold structure and native malformed-model fail-closed behavior passed acceptance. A scaffold build requires separately approved dependency installation. Dependency installation remains separately gated; do not start CA-02 automatically.
 
 Build a standalone Windows AI companion named Astra with a predefined personality, local coding-capable inference, portable personal memory, voice interaction, and permission-controlled computer tools. The default operating path must work without network access after required local software and models are installed. No existing assistant history or memory is seeded into Astra.

@@ -1,10 +1,13 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { worldCameraFraming } from '../../shared/worldCamera';
+import { homeCameraFraming, type HomeCameraMode } from '../../shared/homeCamera';
 import type { WorldFrameSample } from '../../shared/worldPerformance';
 import type { CharacterSignal } from '../../shared/characterStateMachine';
+import type { WorldActivity } from '../../shared/worldActivity';
+import type { CharacterAssetId } from '../../shared/contracts';
+import { HOME_ROOM } from '../../shared/homeLayout';
 
-import { createLivingWorldScene } from './scene';
+import { createLivingWorldScene, type LivingWorldScene } from './scene';
 import { loadCharacterAsset } from './characterAsset';
 import { CharacterController } from './characterController';
 
@@ -28,8 +31,10 @@ interface DiagnosticViewport extends HTMLDivElement {
 }
 
 export interface LivingWorldViewportProps {
+  readonly assetId: CharacterAssetId;
   /** Chat lifecycle events forwarded to the character controller. */
   readonly chatSignal: CharacterSignal;
+  readonly activity: WorldActivity;
   /** Master switch for the autonomous idle scheduler. */
   readonly idleEnabled?: boolean;
   readonly onWaveRequest?: () => void;
@@ -37,7 +42,9 @@ export interface LivingWorldViewportProps {
 }
 
 export const LivingWorldViewport = memo(function LivingWorldViewport({
+  assetId,
   chatSignal,
+  activity,
   idleEnabled = true,
   onWaveRequest,
   onCentreRequest,
@@ -45,9 +52,15 @@ export const LivingWorldViewport = memo(function LivingWorldViewport({
   const containerRef = useRef<DiagnosticViewport>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const controllerRef = useRef<CharacterController | null>(null);
+  const worldRef = useRef<LivingWorldScene | null>(null);
+  const activityRef = useRef(activity);
+  activityRef.current = activity;
   const [userPaused, setUserPaused] = useState(false);
   const [availability, setAvailability] = useState<'loading' | 'ready' | 'unavailable'>('loading');
   const [characterStatus, setCharacterStatus] = useState<CharacterStatus>('loading');
+  const [cameraChoice, setCameraChoice] = useState<'auto' | 'overview' | 'follow'>('auto');
+  const cameraChoiceRef = useRef(cameraChoice);
+  cameraChoiceRef.current = cameraChoice;
   const pausedRef = useRef(false);
   const synchronizeRef = useRef<() => void>(() => {});
 
@@ -72,9 +85,12 @@ export const LivingWorldViewport = memo(function LivingWorldViewport({
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     const world = createLivingWorldScene();
+    worldRef.current = world;
+    world.setMonitorActivity(activityRef.current === 'learning' ? 'learning' : activityRef.current === 'coding' ? 'coding' : 'idle');
     const targetCamera = world.camera.position.clone();
-    const targetLook = new THREE.Vector3(...worldCameraFraming(343, 261).target);
+    const targetLook = new THREE.Vector3(...homeCameraFraming(343, 261, 'overview').target);
     const currentLook = targetLook.clone();
+    let targetFov = world.camera.fov;
     const samples: WorldFrameSample[] = [];
     container.worldSamples = samples;
     let intersecting = true;
@@ -136,6 +152,8 @@ export const LivingWorldViewport = memo(function LivingWorldViewport({
       if (!lastFrameAt || timestamp - lastFrameAt >= ACTIVE_FRAME_MS - 1) {
         world.camera.position.lerp(targetCamera, 0.18);
         currentLook.lerp(targetLook, 0.18);
+        world.camera.fov += (targetFov - world.camera.fov) * 0.18;
+        world.camera.updateProjectionMatrix();
         world.camera.lookAt(currentLook);
         const elapsed = (timestamp - animationStart) / 1000;
         world.updateIdle(elapsed);
@@ -151,14 +169,19 @@ export const LivingWorldViewport = memo(function LivingWorldViewport({
     }
 
     function trackCharacter(): void {
-  const controller = controllerRef.current;
-  if (!controller) return;
-  const position = controller.getDiagnostics().position;
-  // Re-aim so she stays fully in frame wherever she walks. Blending the aim
-  // point keeps the camera from snapping when a journey starts or ends.
-  const framing = worldCameraFraming(canvas!.clientWidth, canvas!.clientHeight, position.x, position.z);
-  const desired = new THREE.Vector3(...framing.position);
-  const desiredLook = new THREE.Vector3(...framing.target);
+      const controller = controllerRef.current;
+      const diagnostics = controller?.getDiagnostics();
+      const position = diagnostics?.position ?? { x: 0, z: 0 };
+      let mode: HomeCameraMode = cameraChoiceRef.current === 'auto'
+        ? activityRef.current === 'coding' || activityRef.current === 'learning'
+          ? 'desk'
+          : diagnostics?.state === 'seated' && diagnostics.waypoint === 'sofa_seat' ? 'sofa' : 'overview'
+        : cameraChoiceRef.current;
+      if (mode === 'desk' && !controller) mode = 'overview';
+      const framing = homeCameraFraming(canvas!.clientWidth, canvas!.clientHeight, mode, position.x, position.z);
+      const desired = new THREE.Vector3(...framing.position);
+      const desiredLook = new THREE.Vector3(...framing.target);
+      targetFov = framing.fovDegrees;
       // Lag the follow slightly so movement reads as a gentle pan, not a snap.
       targetCamera.lerp(desired, 0.05);
       targetLook.lerp(desiredLook, 0.05);
@@ -196,7 +219,7 @@ export const LivingWorldViewport = memo(function LivingWorldViewport({
     const resize = () => {
       const { width, height } = container.getBoundingClientRect();
       if (width < 1 || height < 1) return;
-      const framing = worldCameraFraming(width, height);
+      const framing = homeCameraFraming(width, height, 'overview');
       world.camera.aspect = framing.aspect;
       world.camera.updateProjectionMatrix();
       targetCamera.set(...framing.position);
@@ -229,7 +252,7 @@ export const LivingWorldViewport = memo(function LivingWorldViewport({
     synchronize();
     setAvailability('ready');
 
-    void loadCharacterAsset().then((result) => {
+    void loadCharacterAsset(assetId).then((result) => {
       if (cancelled || disposed) {
         if (result.status === 'ready') result.asset.dispose();
         return;
@@ -242,9 +265,10 @@ export const LivingWorldViewport = memo(function LivingWorldViewport({
         container!.dataset.characterError = result.reason.slice(0, 120);
         return;
       }
-      const controller = new CharacterController(result.asset);
+      const controller = new CharacterController(result.asset, { layout: HOME_ROOM });
       controllerRef.current = controller;
       controller.setIdleEnabled(idleEnabledRef.current);
+      controller.setActivity(activityRef.current);
       world.characterAnchor.add(result.asset.object);
       characterStatusRef.current = 'ready';
       setCharacterStatus('ready');
@@ -263,13 +287,14 @@ export const LivingWorldViewport = memo(function LivingWorldViewport({
       controllerRef.current?.dispose();
       controllerRef.current = null;
       world.dispose();
+      worldRef.current = null;
       renderer.dispose();
       renderer.forceContextLoss();
       delete container.worldSamples;
       delete container.astraDiagnostics;
       synchronizeRef.current = () => {};
     };
-  }, []);
+  }, [assetId]);
 
   useEffect(() => {
     controllerRef.current?.send(chatSignal.event);
@@ -278,6 +303,17 @@ export const LivingWorldViewport = memo(function LivingWorldViewport({
   useEffect(() => {
     controllerRef.current?.setIdleEnabled(idleEnabled);
   }, [idleEnabled]);
+
+  useEffect(() => {
+    controllerRef.current?.setActivity(activity);
+    // The monitor is a visual indicator of actual work, never a progress meter.
+    worldRef.current?.setMonitorActivity(activity === 'learning' ? 'learning' : activity === 'coding' ? 'coding' : 'idle');
+    if (containerRef.current) containerRef.current.dataset.activity = activity;
+  }, [activity]);
+
+  useEffect(() => {
+    if (containerRef.current) containerRef.current.dataset.camera = cameraChoice;
+  }, [cameraChoice]);
 
   return (
     <div className="world-viewport" ref={containerRef} data-world-state="loading" data-frame-count="0" data-fps="0" aria-label="Astra in her room">
@@ -294,6 +330,9 @@ export const LivingWorldViewport = memo(function LivingWorldViewport({
           <button className="world-action" type="button" onClick={onCentreRequest} disabled={characterStatus !== 'ready'} aria-label="Bring Astra to the centre of the room">
             Centre
           </button>
+          <button className="world-action" type="button" onClick={() => setCameraChoice('overview')} aria-label="Show the whole home">Home</button>
+          <button className="world-action" type="button" onClick={() => setCameraChoice('follow')} aria-label="Follow Astra with the camera">Follow</button>
+          <button className="world-action" type="button" onClick={() => setCameraChoice('auto')} aria-label="Reset camera to automatic framing">Reset camera</button>
           {characterStatus === 'loading' && <span className="world-status">Loading Astra…</span>}
           {characterStatus === 'fallback' && <span className="world-status">Placeholder character</span>}
         </div>

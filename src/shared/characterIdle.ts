@@ -48,6 +48,7 @@ export interface IdleDecision {
 export class IdleScheduler {
   private previous: IdleActivity | null = null;
   private remaining = 0;
+  private quietIntervals = 0;
 
   constructor(private options: IdleSchedulerOptions = { ...DEFAULT_IDLE_OPTIONS, random: Math.random }) {
     this.options = { ...options };
@@ -76,6 +77,7 @@ export class IdleScheduler {
   reset(): void {
     this.previous = null;
     this.remaining = this.options.intervalSeconds;
+    this.quietIntervals = 0;
   }
 
   /**
@@ -96,7 +98,19 @@ export class IdleScheduler {
       const hold: IdleDecision = { activity: { kind: 'stay', clip: 'idle_breathing' }, held: true };
       return hold;
     }
+    // Two quiet intervals are pleasant; a third would make the home feel
+    // static. Guarantee one nearby journey without shortening the cooldown.
+    if (this.quietIntervals >= 2) {
+      const kind = this.options.seatDestinations?.length && this.options.random() < 0.35 ? 'sit' : 'walk';
+      const pool = kind === 'sit' ? this.seatPool(currentPosition) : this.openPool(currentPosition);
+      const destination = pool[Math.floor(this.options.random() * pool.length)] ?? 'centre';
+      const activity: IdleActivity = { kind, destination };
+      this.previous = activity;
+      this.quietIntervals = 0;
+      return { activity, held: false };
+    }
     if (this.options.random() >= this.options.activityChance) {
+      this.quietIntervals += 1;
       const hold: IdleDecision = {
         activity: { kind: 'stay', clip: this.options.random() < 0.5 ? 'idle_look_around' : 'idle_weight_shift' },
         held: true,
@@ -121,6 +135,7 @@ export class IdleScheduler {
       kind === 'stay'
         ? { kind: 'stay', clip: 'idle_look_around' }
         : { kind, destination: pick };
+    this.quietIntervals = activity.kind === 'stay' ? this.quietIntervals + 1 : 0;
     // Avoid an immediate repeat so she never appears to loop one behaviour.
     if (this.sameAsPrevious(activity)) {
       const alternative: IdleActivity = { kind: 'stay', clip: 'idle_weight_shift' };

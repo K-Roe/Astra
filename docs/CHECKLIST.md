@@ -1,5 +1,17 @@
 ﻿# Project ASTRA checklist
 
+## LW-03 living home and Character V2 — PARTIAL (2026-10-14)
+
+- [x] Scope and rollback recorded: `docs/LW_03.md` names `c54df9b` as the clean starting checkpoint, preserves V1 as default and confines 3D to read-only activity presentation.
+- [x] Connected living, desk, kitchen/dining and bedroom zones with a single character/nav graph: `tests/homeLayout.test.mjs` validates every waypoint, edge and path. Native home overview was inspected; more visual review remains.
+- [x] Separate Blender V2 **preview** with brunette high ponytail, black hoodie, purple shorts and black boots; 56 bones, 18 clips, 11 morphs, 18,218 triangles, skinning audit pass. Front, side, three-quarter, face, walking and sitting review renders are under `docs/review/lw03/`. This is candidate geometry, **not** an accepted visual match.
+- [x] Typed activity mapping and bounded controller transitions, including missing clips, asset-load failure, reduced motion, cancellation, restart recovery and priority conflicts: covered by the home behaviour, camera, layout, asset-validation and idle suites. Check: `npm test` 247/247 on 2026-10-14.
+- [ ] Karl supplies the approved visual reference file, compares it with actual V2 renders and approves/revises the character. Until then V1 remains default; no exact match claim. **Still open: the reference image has not been supplied.**
+- [x] Native idle life: `node scripts/acceptance-lw03-idle.mjs` passed on 2026-10-14 — autonomous walk, sofa sit with `sofa_relax`, stand up again, 29.8 fps, no stuck state. Screenshots in `docs/review/lw03/`. Frame-by-frame clipping review by Karl is still outstanding.
+- [x] Native real Learning and supervised coding: `node scripts/acceptance-ca01.mjs` passed 82/82 on 2026-10-14, including approved coding taking the rigged character to seated `desk_work` at `desk_seat`, pending approval showing as waiting rather than executing, the Centre control returning her along a real route, a real approved HTTPS fetch entering learning presentation and routing her to the desk, and an operation ending mid-walk leaving a settled honest pose. Restart recovery, cancellation and the full CA-01 security regression all passed. **Recorded limitation:** seated desk work during a *learning* fetch was not observed, because a real crawl here indexes in about 3 s against a 7 s walk; see `test-results/lw03/observations.json`.
+- [x] Mode-specific idle/sofa/walk/learning/coding/chat fps and memory snapshots, with whole-GPU numbers clearly scoped: 29.7-30.0 fps and 392.5-535.8 MiB Electron working set across all modes; whole-GPU figures labelled system-wide in `docs/LW_03.md`.
+- [ ] Final `npm test`, `npm run lint`, `npm run build`, native desktop and CA-01 security regression; review full diff, then local checkpoint of intended validated files only. No push. Automated, build, lint, native desktop and CA-01 runs are all green as of 2026-10-14; the checkpoint commit is the remaining step and must not imply Karl approved V2 as default.
+
 ## CA-01 conversational coding agent — COMPLETE (2026-10-14)
 
 - [x] Disposable native chat inspection, genuine failed-test correction with two UI approvals, patch/test/diff, React/TypeScript scaffold and Git creation, rejection, dirty-tree protection, junction/symlink containment, hostile test output, cancellation, restart recovery, Learning UI, memory and Gemma: `node scripts/acceptance-ca01.mjs` passed 74/74 on 2026-10-14.

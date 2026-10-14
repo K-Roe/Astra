@@ -930,9 +930,10 @@ def main():
     stats["skinning"] = audit
     if audit["unweighted_vertices"] or audit["worst_dominant_bone_distance_m"] > 0.22:
         raise RuntimeError(f"skinning audit failed: {json.dumps(audit)}")
-    (EVIDENCE_DIR / "rig-v1-stats.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
-    print("ASTRA_V1_STATS " + json.dumps(stats))
-    print("ASTRA_V1_COMPLETE")
+    (EVIDENCE_DIR / f"rig-{CHARACTER_VERSION}-stats.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
+    print(f"ASTRA_{CHARACTER_VERSION.upper()}_STATS " + json.dumps(stats))
+    print(f"ASTRA_{CHARACTER_VERSION.upper()}_COMPLETE")
 
 
-main()
+if __name__ == "__main__":
+    main()

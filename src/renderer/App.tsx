@@ -8,6 +8,7 @@ import { ProjectsWorkspace } from './workspaces/Workspaces';
 import { LearningWorkspace } from './workspaces/LearningWorkspace';
 import { presentationForChatPhase, type ChatPhase } from './presentationState';
 import type { CodingTaskView } from '../shared/intelligence';
+import { worldActivityFor } from '../shared/worldActivity';
 
 type WorkspaceId = 'conversation' | 'learning' | 'projects' | 'coding';
 
@@ -32,6 +33,7 @@ export function App() {
   // tool action can never be mistaken for something Astra said.
   const [toolActivity, setToolActivity] = useState<{ id: number; kind: string; label: string; ok: boolean }[]>([]);
   const [codingTask, setCodingTask] = useState<CodingTaskView | null>(null);
+  const [learningRunning, setLearningRunning] = useState(false);
   const [characterSignal, setCharacterSignal] = useState<CharacterSignal>({ event: 'chat_interrupted', nonce: 0 });
   const requestId = useRef(0);
   const lastCodingNotice = useRef('');
@@ -176,6 +178,7 @@ export function App() {
   const statusLabel = phase === 'connecting' ? 'Connecting' : phase === 'generating' ? 'Generating' : phase === 'ready' ? 'Ready' : 'Error';
   const connectionLabel = phase === 'error' ? 'LOCAL MODEL NEEDS ATTENTION' : phase === 'connecting' ? 'CONNECTING TO OLLAMA' : 'GEMMA 3 4B · LOCAL OLLAMA';
   const presentationState = presentationForChatPhase(phase);
+  const worldActivity = worldActivityFor(codingTask?.phase ?? null, learningRunning);
 
   // Coding tool activity mirrors the authoritative task state, so it appears in
   // chat and in the Coding workspace from one source.
@@ -227,6 +230,7 @@ export function App() {
             connectionLabel={connectionLabel}
             version={appInfo?.version}
             chatSignal={characterSignal}
+            activity={worldActivity}
             idleEnabled={idleEnabled}
             onIdleEnabledChange={setIdleEnabled}
             onWaveRequest={() => tellCharacter('user_wave')}
@@ -298,7 +302,7 @@ export function App() {
               </>
             ) : null}
 
-            {activeWorkspace === 'learning' ? <LearningWorkspace /> : null}
+            {activeWorkspace === 'learning' ? <LearningWorkspace onLearningActivityChange={setLearningRunning} /> : null}
             {activeWorkspace === 'projects' ? <ProjectsWorkspace /> : null}
             {activeWorkspace === 'coding' ? <CodingWorkspace tellCharacter={tellCharacter} /> : null}
           </section>

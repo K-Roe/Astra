@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { learning, memory, type IntelligenceResult } from '../intelligence/client';
 import type { KnowledgePassageView, KnowledgeSourceView } from '../../shared/intelligence';
 import type { KnowledgeStats, MemoryView } from './types';
@@ -12,7 +12,7 @@ type Status = { readonly tone: 'ok' | 'error' | 'busy'; readonly text: string } 
  * the limit that matters: a completed fetch means pages were indexed, not that
  * the model has mastered the subject.
  */
-export function LearningWorkspace() {
+export function LearningWorkspace({ onLearningActivityChange }: { onLearningActivityChange?: (running: boolean) => void } = {}) {
   const [sourceList, setSourceList] = useState<KnowledgeSourceView[]>([]);
   const [url, setUrl] = useState('');
   const [query, setQuery] = useState('');
@@ -21,6 +21,7 @@ export function LearningWorkspace() {
   const [status, setStatus] = useState<Status>(null);
   const [memoryList, setMemoryList] = useState<MemoryView[]>([]);
   const [statement, setStatement] = useState('');
+  const learningBusy = useRef(false);
 
   const refresh = useCallback(async () => {
     const [s, st, m] = await Promise.all([learning.listSources(), learning.stats(), memory.list()]);
@@ -54,16 +55,24 @@ export function LearningWorkspace() {
   }
 
   async function learn(id: number) {
+    if (learningBusy.current) return;
+    learningBusy.current = true;
+    onLearningActivityChange?.(true);
     setStatus({ tone: 'busy', text: 'Fetching approved pages…' });
-    const result = await learning.learnSource(id);
-    if (!result.ok) setStatus({ tone: 'error', text: result.error });
-    else {
-      setStatus({
-        tone: 'ok',
-        text: `Indexed ${result.value.documents} page(s). ${result.value.errors.length} page(s) were skipped. This stores text for retrieval; it does not retrain any model.`,
-      });
+    try {
+      const result = await learning.learnSource(id);
+      if (!result.ok) setStatus({ tone: 'error', text: result.error });
+      else {
+        setStatus({
+          tone: 'ok',
+          text: `Indexed ${result.value.documents} page(s). ${result.value.errors.length} page(s) were skipped. This stores text for retrieval; it does not retrain any model.`,
+        });
+      }
+      await refresh();
+    } finally {
+      learningBusy.current = false;
+      onLearningActivityChange?.(false);
     }
-    await refresh();
   }
 
   async function revoke(id: number) {

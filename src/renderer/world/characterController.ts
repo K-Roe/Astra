@@ -21,6 +21,7 @@ import {
   type Waypoint,
 } from '../../shared/characterNavigation';
 import type { CharacterAsset } from './characterAsset';
+import type { WorldActivity } from '../../shared/worldActivity';
 
 export interface CharacterDiagnostics {
   readonly state: CharacterState;
@@ -32,6 +33,7 @@ export interface CharacterDiagnostics {
   readonly transitions: number;
   readonly idleActivities: number;
   readonly blinkCount: number;
+  readonly activity: WorldActivity;
 }
 
 export interface CharacterControllerOptions {
@@ -93,6 +95,7 @@ export class CharacterController {
   private idleActivities = 0;
   private blinkCount = 0;
   private disposed = false;
+  private activity: WorldActivity = 'idle';
 
   constructor(
     private readonly asset: CharacterAsset,
@@ -138,12 +141,39 @@ export class CharacterController {
   /** Public control surface used by the UI. */
   send(event: CharacterEvent): void {
     if (this.disposed) return;
+    // The typed activity snapshot, not an incidental chat event, owns work
+    // presentation. Acknowledgement may change her face without rerouting her.
+    if (event.startsWith('coding_')) return;
+    if (event === 'user_center') {
+      this.returnToCentre();
+      return;
+    }
+    if (this.activity === 'coding' || this.activity === 'learning') {
+      if (event === 'chat_reply' || event === 'user_wave') this.applyMorph('smile', 1);
+      return;
+    }
     this.applyEvent(event);
+  }
+
+  setActivity(activity: WorldActivity): void {
+    if (this.disposed || this.activity === activity) return;
+    const previous = this.activity;
+    this.activity = activity;
+    this.scheduler.reset();
+    if (activity === 'coding' || activity === 'learning') {
+      this.ensureWorkJourney();
+    } else if ((previous === 'coding' || previous === 'learning') && (this.state === 'walking' || this.state === 'turning')) {
+      this.clearPath();
+      this.enter('idle', this.state, 'go_to');
+    } else if (this.state === 'seated' && this.seatId === 'desk_seat') {
+      this.playClip('seated_idle', true);
+      if (previous === 'coding' || previous === 'learning') this.applyMorph('happy', 1);
+    }
   }
 
   setIdleEnabled(enabled: boolean): void {
     this.scheduler.setEnabled(enabled);
-    if (enabled) return;
+    if (enabled || this.activity === 'coding' || this.activity === 'learning') return;
     // Stop where she is. Disabling idle activities must not make her walk:
     // if she is on a seat she still needs to stand up first.
     if (this.state === 'seated') {
@@ -161,7 +191,11 @@ export class CharacterController {
 
   /** Return to the middle of the room and face the user. */
   returnToCentre(): void {
-    this.send('user_center');
+    if (this.activity === 'coding' || this.activity === 'learning') return;
+    if (this.state === 'seated') {
+      this.applyEvent('leave_seat');
+      return;
+    }
     this.beginJourney('centre');
   }
 
@@ -175,6 +209,7 @@ export class CharacterController {
     this.asset.mixer.update(clamped);
     this.updateBlink(clamped);
     this.updateNavigation(clamped);
+    if (this.activity === 'coding' || this.activity === 'learning') this.ensureWorkJourney();
     this.updateIdleScheduler(clamped);
     this.updateOneShotCompletion();
   }
@@ -199,6 +234,7 @@ export class CharacterController {
       transitions: this.transitions,
       idleActivities: this.idleActivities,
       blinkCount: this.blinkCount,
+      activity: this.activity,
     };
   }
 
@@ -235,7 +271,7 @@ export class CharacterController {
         break;
       case 'seated':
         this.seatId = this.destination;
-        this.playClip(STATE_CLIP.seated, true);
+        this.playClip(this.seatId === 'sofa_seat' && this.asset.clips.has('sofa_relax') ? 'sofa_relax' : STATE_CLIP.seated, true);
         break;
       case 'interacting':
         this.playClip(STATE_CLIP.interacting, true);
@@ -274,7 +310,8 @@ export class CharacterController {
     this.pathIndex = 0;
     this.waypoint = from.id;
     if (this.path.length === 0) {
-      this.applyEvent('arrive');
+      if (isSeatApproach(destination)) this.enter('sitting_down', this.state, 'sit_start');
+      else this.applyEvent('arrive');
       return;
     }
     this.enter('turning', this.state, 'go_to');
@@ -345,11 +382,16 @@ export class CharacterController {
       this.seatId = null;
       this.destination = null;
       this.applyEvent('stand_done');
-      this.leaveSeatIfNeeded();
+      if (this.activity === 'coding' || this.activity === 'learning') this.beginJourney('desk_seat');
+      else this.leaveSeatIfNeeded();
     }
   }
 
   private finishWalk(): void {
+    if ((this.activity === 'coding' || this.activity === 'learning') && this.destination !== 'desk_seat') {
+      this.beginJourney('desk_seat');
+      return;
+    }
     if (this.destination && isSeatApproach(this.destination)) {
       this.waypoint = this.destination;
       this.snapToFacing(this.destination);
@@ -373,6 +415,9 @@ export class CharacterController {
   }
 
   private updateIdleScheduler(deltaSeconds: number): void {
+    // A plan awaiting Karl's approval is not executable work. She can relax
+    // normally while waiting, including leaving the desk after a cooldown.
+    if (this.activity === 'coding' || this.activity === 'learning') return;
     if (isChatDriven(this.state) || this.state === 'waving') {
       this.scheduler.reset();
       return;
@@ -385,7 +430,11 @@ export class CharacterController {
     this.idleActivities += 1;
     const activity = decision.activity;
     if (activity.kind === 'stay') {
-      this.playClip(activity.clip, true);
+      if (activity.clip === 'idle_weight_shift' && this.state === 'idle' && this.asset.clips.has('stretch')) {
+        this.playClip('stretch', false);
+      } else {
+        this.playClip(activity.clip, true);
+      }
       return;
     }
     if (this.state === 'seated') {
@@ -402,6 +451,21 @@ export class CharacterController {
     if (!isAutonomous(this.state) && this.state !== 'idle') return;
     this.destination = activity.destination;
     this.beginJourney(activity.destination);
+  }
+
+  /** Work can preempt idle at a stable waypoint, but never starts a second path. */
+  private ensureWorkJourney(): void {
+    if (this.state === 'seated' && this.seatId === 'desk_seat') {
+      const clip = this.asset.clips.has('desk_work') ? 'desk_work' : 'thinking';
+      if (this.currentClipName !== clip) this.playClip(clip, true);
+      return;
+    }
+    if (this.state === 'seated') {
+      this.applyEvent('leave_seat');
+      return;
+    }
+    if (['sitting_down', 'standing_up', 'walking', 'turning'].includes(this.state)) return;
+    this.beginJourney('desk_seat');
   }
 
   private rotateToward(targetFacing: number, deltaSeconds: number): boolean {
@@ -461,6 +525,10 @@ export class CharacterController {
   }
 
   private updateOneShotCompletion(): void {
+    if (this.currentClipName === 'stretch' && this.now() >= this.clipEndsAt) {
+      this.playClip(STATE_CLIP.idle, true);
+      return;
+    }
     // Completion is driven by the clip itself, not by stateHoldsClip: `waving`
     // holds its pose but still runs a one-shot `wave` clip that must finish.
     if (!this.oneShotFinished()) return;

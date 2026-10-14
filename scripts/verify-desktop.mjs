@@ -117,18 +117,20 @@ async function verifyCharacterMovement(page) {
   const start = await characterProbe(page);
   assert.equal(start.asset, 'ready', `rigged character failed to load (${start.error ?? 'unknown'})`);
   let moved = false;
+  let last = start;
   while (Date.now() < deadline && !moved) {
     await delay(1000);
     const current = await characterProbe(page);
+    last = current;
     if (current.x !== start.x || current.z !== start.z) moved = true;
   }
-  assert.equal(moved, true, 'character never navigated away from its starting waypoint');
+  assert.equal(moved, true, `character never navigated away from its starting waypoint: ${JSON.stringify({ start, last })}`);
   return { start, moved };
 }
 
 async function characterProbe(page) {
   const result = await page.send('Runtime.evaluate', {
-    expression: "(()=>{const v=document.querySelector('.world-viewport');const d=v?.astraDiagnostics;return JSON.stringify({asset:v?.dataset.characterAsset,error:v?.dataset.characterError,state:d?.state,clip:d?.clip,x:d?.x,z:d?.z})})()",
+    expression: "(()=>{const v=document.querySelector('.world-viewport');const d=v?.astraDiagnostics;return JSON.stringify({asset:v?.dataset.characterAsset,error:v?.dataset.characterError,worldState:v?.dataset.worldState,frames:v?.dataset.frameCount,state:d?.state,clip:d?.clip,x:d?.x,z:d?.z})})()",
     returnByValue: true,
   });
   return JSON.parse(result.result.value);

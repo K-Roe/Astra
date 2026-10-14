@@ -27,10 +27,37 @@ const PATCH = [
 ];
 
 const ROOT = 'C:\\Users\\karlr\\repos';
+const lw03ReviewDir = path.join(process.cwd(), 'docs', 'review', 'lw03');
+const lw03Samples = [];
+const learningTimeline = [];
+mkdirSync(lw03ReviewDir, { recursive: true });
+async function captureLw03(page, name) {
+  const result = await page.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+  writeFileSync(path.join(lw03ReviewDir, name), Buffer.from(result.data, 'base64'));
+}
+async function sampleLw03(page, pid, label) {
+  const presentation = JSON.parse(await bridgeEval(page, "(()=>{const v=document.querySelector('.world-viewport');const d=v?.astraDiagnostics;return JSON.stringify({activity:v?.dataset.activity,fps:Number(v?.dataset.fps),state:d?.state,clip:d?.clip,waypoint:d?.waypoint})})()"));
+  let appWorkingSetMiB = null;
+  try {
+    const script = `$all=Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId; $ids=@(${pid}); do { $next=@($all | Where-Object { $ids -contains $_.ParentProcessId -and $ids -notcontains $_.ProcessId } | ForEach-Object ProcessId); $ids+= $next } while ($next.Count -gt 0); $procs=@(Get-Process -Id $ids -ErrorAction SilentlyContinue); [math]::Round((($procs | Measure-Object WorkingSet64 -Sum).Sum / 1MB),1)`;
+    appWorkingSetMiB = Number(execFileSync('powershell.exe', ['-NoProfile', '-Command', script], { encoding: 'utf8' }).trim());
+  } catch { /* Process counters unavailable. */ }
+  lw03Samples.push({ label, at: new Date().toISOString(), presentation, appWorkingSetMiB, systemFreeRamMiB: Math.round(os.freemem() / 1048576), note: 'Electron process tree and rendered fps; GPU memory is not attributed to this activity' });
+}
 const results = [];
+const observations = [];
 function record(scenario, step, ok, detail = '') {
   results.push({ scenario, step, ok, detail });
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${scenario} :: ${step}${detail ? ` - ${detail}` : ''}`);
+}
+/**
+ * Record what was actually seen without asserting it either way. Used for
+ * behaviour that depends on how long a real operation takes on this machine,
+ * so a limitation is reported honestly instead of hidden or dressed up.
+ */
+function observe(scenario, step, value, detail = '') {
+  observations.push({ scenario, step, value, detail });
+  console.log(`  NOTE  ${scenario} :: ${step} = ${value}${detail ? ` - ${detail}` : ''}`);
 }
 const bridgeEval = async (page, expression) => {
   const result = await page.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
@@ -161,6 +188,15 @@ try {
   page = connect(target.webSocketDebuggerUrl);
   await Promise.all([browser.ready, page.ready]);
 await new Promise((r) => setTimeout(r, 5000));
+  const selectedPreview = await bridgeEval(page, "(()=>{const s=document.querySelector('.character-version-select select'); if(!s)return false; s.value='astra-character-v2'; s.dispatchEvent(new Event('change',{bubbles:true})); return true})()");
+  const previewDeadline = Date.now() + 10000;
+  let previewReady = false;
+  while (Date.now() < previewDeadline && !previewReady) {
+    previewReady = await bridgeEval(page, "document.querySelector('.character-version-select select')?.value==='astra-character-v2' && document.querySelector('.world-viewport')?.dataset.characterAsset==='ready'");
+    if (!previewReady) await new Promise((r) => setTimeout(r, 150));
+  }
+  record('LW03', 'V2 preview loads through the real asset selector', selectedPreview && previewReady);
+  if (previewReady) await captureLw03(page, 'home-preview-native.png');
 
   const chat = (text) => bridgeEval(page, `window.astra.sendMessage(${JSON.stringify(text)}).then(s=>JSON.stringify({ok:true})).catch(e=>JSON.stringify({ok:false,error:e.message}))`);
 
@@ -186,17 +222,21 @@ await new Promise((r) => setTimeout(r, 5000));
     }
     throw new Error(`timed out waiting for ${wanted.join(', ')}`);
   };
-  const approveInChat = async () => {
-    const end = Date.now() + 10000;
+  const approveInChat = async (ms = 45000) => {
+    // Local inference and the 30 fps world share one machine, so the plan can
+    // reach awaiting_approval well after the chat reply is rendered.
+    const end = Date.now() + ms;
+    let seen = 'no snapshot';
     while (Date.now() < end) {
-      const ready = await bridgeEval(page, "Promise.all([window.astraIntelligence.codingSnapshot(), Promise.resolve(document.querySelector('.coding-chat-control')?.dataset.taskId)]).then(([task,id])=>task.phase==='awaiting_approval' && String(task.taskId)===id)");
+      const ready = await bridgeEval(page, "Promise.all([window.astraIntelligence.codingSnapshot(), Promise.resolve(document.querySelector('.coding-chat-control')?.dataset.taskId ?? null), Promise.resolve(document.querySelector('.coding-chat-control')?.innerText?.slice(0,60) ?? null)]).then(([task,id,text])=>{window.__ca01Last=JSON.stringify({phase:task.phase,taskId:task.taskId,id,text});return task.phase==='awaiting_approval' && String(task.taskId)===id})");
       if (ready) {
         await bridgeEval(page, "document.querySelector('.coding-chat-control button').click(); true");
         return;
       }
+      seen = await bridgeEval(page, "window.__ca01Last ?? 'none'");
       await new Promise((r) => setTimeout(r, 200));
     }
-    throw new Error('chat approval control did not appear');
+    throw new Error(`chat approval control did not appear: ${seen}`);
   };
 
   // ------------------------------------------------------- A: chat inspection
@@ -220,6 +260,14 @@ await new Promise((r) => setTimeout(r, 5000));
 
   let snapshot = JSON.parse(await bridgeEval(page, "window.astraIntelligence.codingSnapshot().then(s=>JSON.stringify(s))"));
   record('B', 'plan names the file that will change', (snapshot.plan?.filesToChange ?? []).some((f) => f.includes('sum.js')), JSON.stringify(snapshot.plan?.filesToChange));
+  let waitingPresentation;
+  const waitingDeadline = Date.now() + 2500;
+  do {
+    waitingPresentation = JSON.parse(await bridgeEval(page, "(()=>{const v=document.querySelector('.world-viewport');return JSON.stringify({activity:v?.dataset.activity,clip:v?.astraDiagnostics?.clip})})()"));
+    if (waitingPresentation.activity === 'awaiting_approval') break;
+    await new Promise((r) => setTimeout(r, 100));
+  } while (Date.now() < waitingDeadline);
+  record('LW03', 'pending approval is shown as waiting rather than executing', waitingPresentation.activity === 'awaiting_approval' && waitingPresentation.clip !== 'desk_work', JSON.stringify(waitingPresentation));
   const switchedBeforeApproval = await tryEval(page, `window.astraIntelligence.codingSelectRepository(${embed(recoveryRepo)})`);
   record('F', 'a pending plan cannot be redirected to another repository', switchedBeforeApproval.ok === false && (await bridgeEval(page, "window.astraIntelligence.codingSnapshot().then(s=>s.repository)")) === fixtureRepo);
   const beforeEdit = readFileSync(path.join(fixtureRepo, 'src', 'sum.js'), 'utf8');
@@ -337,6 +385,21 @@ await new Promise((r) => setTimeout(r, 5000));
   await freshReply('Investigate why the tests fail');
   await approveInChat();
   await waitForPhase(['testing']);
+  // She may start across the room, so allow a real walk plus the sit down
+  // before requiring the keyboard pose. A test phase lasts far longer.
+  const deskDeadline = Date.now() + 40000;
+  let deskPresentation;
+  do {
+    deskPresentation = JSON.parse(await bridgeEval(page, "(()=>{const v=document.querySelector('.world-viewport');const d=v?.astraDiagnostics;return JSON.stringify({activity:v?.dataset.activity,state:d?.state,clip:d?.clip,waypoint:d?.waypoint,asset:d?.asset})})()"));
+    if (deskPresentation.activity === 'coding' && deskPresentation.waypoint === 'desk_seat' && deskPresentation.clip === 'desk_work') break;
+    await new Promise((r) => setTimeout(r, 300));
+  } while (Date.now() < deskDeadline);
+  record('LW03', 'approved live test takes the rigged character to desk work', deskPresentation.activity === 'coding' && deskPresentation.waypoint === 'desk_seat' && ['desk_work', 'thinking'].includes(deskPresentation.clip), JSON.stringify(deskPresentation));
+  record('LW03', 'character replacement is disabled during executable work', await bridgeEval(page, "document.querySelector('.character-version-select select')?.disabled===true"));
+  if (deskPresentation.waypoint === 'desk_seat') {
+    await captureLw03(page, 'desk-work-native.png');
+    await sampleLw03(page, child.pid, 'approved_coding_test');
+  }
   const switchedDuringExecution = await tryEval(page, `window.astraIntelligence.codingSelectRepository(${embed(fixtureRepo)})`);
   record('F', 'repository switching is refused during an active test', switchedDuringExecution.ok === false && (await bridgeEval(page, "window.astraIntelligence.codingSnapshot().then(s=>s.repository)")) === cancelRepo);
   const cancelButtonDeadline = Date.now() + 5000;
@@ -394,6 +457,9 @@ await new Promise((r) => setTimeout(r, 5000));
     page2 = connect(t2.webSocketDebuggerUrl);
     await Promise.all([browser2.ready, page2.ready]);
     await new Promise((r) => setTimeout(r, 5000));
+    await bridgeEval(page2, "(()=>{const s=document.querySelector('.character-version-select select');s.value='astra-character-v2';s.dispatchEvent(new Event('change',{bubbles:true}));return true})()");
+    const restartedPreviewEnd = Date.now() + 10000;
+    while (Date.now() < restartedPreviewEnd && await bridgeEval(page2, "document.querySelector('.world-viewport')?.dataset.characterAsset") !== 'ready') await new Promise((r) => setTimeout(r, 150));
 
     const after = JSON.parse(await bridgeEval(page2, "window.astraIntelligence.codingSnapshot().then(s=>JSON.stringify(s))"));
     record('E', 'the task record survives the restart', after.taskId !== null, `task #${after.taskId}`);
@@ -452,20 +518,72 @@ await new Promise((r) => setTimeout(r, 5000));
     console.log('\nG — Existing functionality');
     const stats = JSON.parse(await bridgeEval(page2, "window.astraIntelligence.knowledgeStats().then(s=>JSON.stringify(s))"));
     record('G', 'the knowledge service is alive', stats !== null, JSON.stringify(stats));
-    const source = JSON.parse(await bridgeEval(page2, "window.astraIntelligence.addSource({url:'https://react.dev/learn',maxPages:1,maxDepth:0}).then(s=>JSON.stringify(s))"));
+    await bridgeEval(page2, "document.querySelector('[aria-label=\"Bring Astra to the centre of the room\"]')?.click(); true");
+    let atCentre = false;
+    let centreSeen = 'not observed';
+    const centreDeadline = Date.now() + 30000;
+    while (Date.now() < centreDeadline && !atCentre) {
+      centreSeen = await bridgeEval(page2, "(()=>{const v=document.querySelector('.world-viewport');const d=v?.astraDiagnostics;window.__ca01Centre=JSON.stringify({state:d?.state,clip:d?.clip,waypoint:d?.waypoint,destination:d?.destination,x:d?.x,z:d?.z,activity:v?.dataset.activity,paused:v?.dataset.worldState});return window.__ca01Centre})()");
+      atCentre = await bridgeEval(page2, "(()=>{const d=document.querySelector('.world-viewport')?.astraDiagnostics;return d?.waypoint==='centre' && !['walking','turning','sitting_down','standing_up'].includes(d.state)})()");
+      if (!atCentre) await new Promise((r) => setTimeout(r, 250));
+    }
+    record('LW03', 'Centre control brings her out of the chair along a real route', atCentre, centreSeen);
+    const source = JSON.parse(await bridgeEval(page2, "window.astraIntelligence.addSource({url:'https://www.typescriptlang.org/docs/handbook/intro.html',maxPages:12,maxDepth:2}).then(s=>JSON.stringify(s))"));
     record('G', 'an HTTPS source is approved in the disposable profile', source.approved === true);
     await bridgeEval(page2, "[...document.querySelectorAll('.workspace-tabs button')].find(b=>b.innerText==='Learning').click(); true");
     await new Promise((r) => setTimeout(r, 600));
-    const learnClicked = await bridgeEval(page2, "(()=>{const row=[...document.querySelectorAll('.source-list li')].find(e=>e.innerText.includes('react.dev/learn')); const button=[...(row?.querySelectorAll('button')??[])].find(b=>b.innerText==='Learn'); if(!button)return false; button.click(); return true})()");
+    const learnClicked = await bridgeEval(page2, "(()=>{const row=[...document.querySelectorAll('.source-list li')].find(e=>e.innerText.includes('typescriptlang.org/docs/handbook')); const button=[...(row?.querySelectorAll('button')??[])].find(b=>b.innerText==='Learn'); if(!button)return 'row:'+(row?.innerText??'none').slice(0,80); button.click(); return true})()");
     record('G', 'Learning workspace starts the approved fetch', learnClicked === true);
+    let learningPresentation = false;
+    let learningScreenshot = false;
+    let learningDesk = false;
+    let learningRouting = false;
     let learned = false;
+    let fetching = true;
+    let lastTimelineKey = '';
     const learnDeadline = Date.now() + 65000;
-    while (Date.now() < learnDeadline && !learned) {
+    while (Date.now() < learnDeadline && (!learned || fetching)) {
       const current = JSON.parse(await bridgeEval(page2, "window.astraIntelligence.knowledgeStats().then(s=>JSON.stringify(s))"));
+      const presentation = JSON.parse(await bridgeEval(page2, "(()=>{const v=document.querySelector('.world-viewport');const d=v?.astraDiagnostics;return JSON.stringify({activity:v?.dataset.activity,state:d?.state,clip:d?.clip,waypoint:d?.waypoint,destination:d?.destination})})()"));
+      const key = JSON.stringify(presentation);
+      if (key !== lastTimelineKey) {
+        lastTimelineKey = key;
+        learningTimeline.push({ at: new Date().toISOString(), ...presentation });
+      }
+      learningPresentation ||= presentation.activity === 'learning';
+      learningRouting ||= presentation.activity === 'learning' && (presentation.destination === 'desk_seat' || presentation.waypoint === 'desk_seat');
+      learningDesk ||= presentation.activity === 'learning' && presentation.waypoint === 'desk_seat' && presentation.clip === 'desk_work';
+      if (learningPresentation && !learningScreenshot) {
+        await captureLw03(page2, 'learning-native.png');
+        await sampleLw03(page2, child2.pid, 'approved_learning_fetch');
+        learningScreenshot = true;
+      }
       learned = current.documents >= 1;
-      if (!learned) await new Promise((r) => setTimeout(r, 500));
+      fetching = presentation.activity === 'learning';
+      if (!learned || fetching) await new Promise((r) => setTimeout(r, 300));
     }
     record('G', 'the real HTTPS page is indexed through Learning', learned);
+    record('LW03', 'approved website fetch enters real learning presentation', learningPresentation, JSON.stringify(learningTimeline.slice(0, 4)));
+    record('LW03', 'real approved learning routes her to the desk', learningRouting, JSON.stringify(learningTimeline.filter((s) => s.activity === 'learning').slice(0, 8)));
+    // An operation that ends mid-walk must leave her standing at a real
+    // waypoint, not mid-stride and not claiming to work.
+    let settled = null;
+    const settleDeadline = Date.now() + 12000;
+    while (Date.now() < settleDeadline && !settled) {
+      settled = JSON.parse(await bridgeEval(page2, "(()=>{const v=document.querySelector('.world-viewport');const d=v?.astraDiagnostics;return JSON.stringify({activity:v?.dataset.activity,state:d?.state,clip:d?.clip,waypoint:d?.waypoint})})()"));
+      if (settled.activity === 'learning' || ['walking', 'turning', 'sitting_down', 'standing_up'].includes(settled.state)) settled = null;
+      if (!settled) await new Promise((r) => setTimeout(r, 250));
+    }
+    record('LW03', 'a learning operation that ends mid-walk leaves a settled, honest pose', Boolean(settled) && settled.activity === 'idle' && settled.clip !== 'desk_work', JSON.stringify(settled));
+
+    // A real crawl on this machine indexes in a few seconds, which can be
+    // shorter than a walk across the room. That is recorded as an observation
+    // rather than dressed up as a pass.
+    const learningSeconds = learningTimeline.at(-1) && learningTimeline[0]
+      ? (Date.parse(learningTimeline.at(-1).at) - Date.parse(learningTimeline[0].at)) / 1000
+      : null;
+    observe('LW03', 'seated desk work during a learning fetch', learningDesk, `learning visible for ${learningSeconds}s on this machine; see docs/LW_03.md`);
+
     await bridgeEval(page2, "[...document.querySelectorAll('.workspace-tabs button')].find(b=>b.innerText==='Chat').click(); true");
     const memory = JSON.parse(await bridgeEval(page2, "window.astraIntelligence.rememberMemory({statement:'CA-01 acceptance memory'}).then(m=>JSON.stringify({ok:true,id:m.id})).catch(e=>JSON.stringify({ok:false,e:e.message}))"));
     record('G', 'persistent memory still works', memory.ok === true, JSON.stringify(memory));
@@ -567,6 +685,10 @@ const failed = results.filter((r) => !r.ok);
 const { mkdirSync: mkdir, writeFileSync: write } = await import('node:fs');
 mkdir('test-results/ca01', { recursive: true });
 write('test-results/ca01/acceptance.json', JSON.stringify(results, null, 2), 'utf8');
+write('test-results/lw03/observations.json', JSON.stringify(observations, null, 2), 'utf8');
+mkdir('test-results/lw03', { recursive: true });
+write('test-results/lw03/activity-native.json', JSON.stringify(lw03Samples, null, 2), 'utf8');
+write('test-results/lw03/learning-timeline.json', JSON.stringify(learningTimeline, null, 2), 'utf8');
 console.log(`\n${results.length - failed.length}/${results.length} CA-01 acceptance checks passed`);
 if (failed.length) {
   console.log('FAILED:');

@@ -42,7 +42,7 @@ async function resolveCharacterAsset(id: CharacterAssetId): Promise<string> {
   if (!CHARACTER_ASSET_IDS.includes(id)) throw new Error('Unknown character asset');
 
   const rendererDir = path.resolve(__dirname, '../../dist/renderer');
-  // Matches `astra-character-v1.glb` and `astra-character-v1-<hash>.glb` only.
+  // Matches only a named, bundled V1 or V2 asset (optionally Vite hashed).
   const pattern = new RegExp(`^${id}(?:-[\\w-]+)?\\.glb$`);
   for (const dir of [path.join(rendererDir, 'assets'), rendererDir]) {
     const entries = await readdir(dir).catch(() => [] as string[]);

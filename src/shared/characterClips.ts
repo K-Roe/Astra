@@ -30,6 +30,12 @@ export const CHARACTER_CLIPS = [
 
 export type CharacterClip = (typeof CHARACTER_CLIPS)[number];
 
+/** Refuse an incomplete GLB before its controller can enter a stuck one-shot. */
+export function missingRequiredCharacterClips(names: Iterable<string>): CharacterClip[] {
+  const available = new Set(names);
+  return CHARACTER_CLIPS.filter((name) => !available.has(name));
+}
+
 /** Morph targets driving the face. `vis_*` are speech-ready shapes. */
 export const CHARACTER_MORPHS = [
   'happy',

@@ -1,6 +1,8 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import type { CharacterSignal } from '../shared/characterStateMachine';
+import type { CharacterAssetId } from '../shared/contracts';
 import type { PresentationState } from './presentationState';
+import type { WorldActivity } from '../shared/worldActivity';
 
 const LivingWorldViewport = lazy(async () => {
   const module = await import('./world/LivingWorldViewport');
@@ -12,6 +14,7 @@ interface AvatarPanelProps {
   readonly connectionLabel: string;
   readonly version?: string;
   readonly chatSignal: CharacterSignal;
+  readonly activity: WorldActivity;
   readonly idleEnabled: boolean;
   readonly onIdleEnabledChange: (enabled: boolean) => void;
   readonly onWaveRequest: () => void;
@@ -31,12 +34,15 @@ export function AvatarPanel({
   connectionLabel,
   version,
   chatSignal,
+  activity,
   idleEnabled,
   onIdleEnabledChange,
   onWaveRequest,
   onCentreRequest,
 }: AvatarPanelProps) {
   const copy = stateCopy[state];
+  const [assetId, setAssetId] = useState<CharacterAssetId>('astra-character-v1');
+  const working = activity === 'coding' || activity === 'learning';
 
   return (
     <aside className="avatar-panel" aria-label="Astra character panel" data-presentation-state={state}>
@@ -47,7 +53,10 @@ export function AvatarPanel({
       <div className="avatar-stage">
         <Suspense fallback={<p className="world-loading">Preparing local 3D room…</p>}>
           <LivingWorldViewport
+            key={assetId}
+            assetId={assetId}
             chatSignal={chatSignal}
+            activity={activity}
             idleEnabled={idleEnabled}
             onWaveRequest={onWaveRequest}
             onCentreRequest={onCentreRequest}
@@ -55,7 +64,14 @@ export function AvatarPanel({
         </Suspense>
       </div>
       <div className="avatar-panel-bottom">
-        <p className="placeholder-label">Astra character V1 · rigged locally</p>
+        <label className="character-version-select">
+          <span>Character</span>
+          <select value={assetId} disabled={working} onChange={(event) => setAssetId(event.target.value as CharacterAssetId)}>
+            <option value="astra-character-v1">V1 approved</option>
+            <option value="astra-character-v2">V2 preview</option>
+          </select>
+        </label>
+        <p className="placeholder-label">{assetId === 'astra-character-v2' ? 'Character V2 preview · awaiting visual approval' : 'Astra character V1 · rigged locally'}</p>
         <h2>Astra</h2>
         <p className="avatar-tagline">A little spark. A lot of curiosity.</p>
         <div className={`avatar-presence avatar-presence-${state}`} role="status" aria-live="polite">
