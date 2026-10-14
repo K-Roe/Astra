@@ -25,6 +25,9 @@ test-results/
 *.safetensors
 *.onnx
 models/
+!src/main/models/
+src/main/models/*
+!src/main/models/*.ts
 data/
 backups/
 logs/

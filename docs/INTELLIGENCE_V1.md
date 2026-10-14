@@ -1,5 +1,7 @@
 # Intelligence V1 — architecture and operating manual
 
+**CA-01 extension, 2026-10-14.** Intelligence V1 is committed as `b32bdb0`. CA-01 extends its services with normal-chat intent routing, structured local Qwen patch proposals, shared coding task state, chat/Coding approval, exact scaffold creation and background execution. It does not replace the V1 database, crawler, repository tools, approval manager or model routing. Disposable native acceptance passed 74/74, including a real failed-test correction with fresh approval and a malformed-model fail-closed check; CA-01 is COMPLETE within the limits in `docs/CA_01.md`. Historical V1 statements below describe the pre-CA-01 state.
+
 Approved by Karl, 2026-10-13. This document is the reference for another agent
 or for Karl himself. It records what was built, what was measured, and what is
 still not true.

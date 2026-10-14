@@ -1,5 +1,12 @@
 ﻿# Project ASTRA checklist
 
+## CA-01 conversational coding agent — COMPLETE (2026-10-14)
+
+- [x] Disposable native chat inspection, genuine failed-test correction with two UI approvals, patch/test/diff, React/TypeScript scaffold and Git creation, rejection, dirty-tree protection, junction/symlink containment, hostile test output, cancellation, restart recovery, Learning UI, memory and Gemma: `node scripts/acceptance-ca01.mjs` passed 74/74 on 2026-10-14.
+- [x] Focused and native checks: `npm test` 235/235, lint, real website crawl, and the final `npm run verify:desktop` passed with clean exit on 2026-10-14. Screenshots were inspected.
+- [x] Native malformed-model-response fault injection: two bad JSON replies, bounded retry, chat explanation, no approval, edit or command. Partly applied work still requires manual review. The React/TypeScript scaffold has valid static structure but no installed dependencies or build result. See `docs/CA_01.md`.
+- [x] CA-01 complete within its approved limits. Dependency installation and a scaffold build require separate approval.
+
 Status meanings: `[x]` verified by the stated check; `[ ]` pending. A checked design requirement means the requirement is documented, not that runtime behavior exists. Record new evidence beside each item before changing its status.
 
 ## M0 repository and documentation

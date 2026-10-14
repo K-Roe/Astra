@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import {
   APP_INFO_CHANNEL,
   CHAT_CLEAR_CHANNEL,
+  CHAT_CANCEL_CHANNEL,
   CHAT_SEND_CHANNEL,
   CHAT_STATUS_CHANNEL,
   CHARACTER_ASSET_CHANNEL,
@@ -24,6 +25,7 @@ const bridge: AstraBridge = {
   getChatStatus: (): Promise<ChatStatus> => ipcRenderer.invoke(CHAT_STATUS_CHANNEL) as Promise<ChatStatus>,
   sendMessage: (content: string): Promise<ChatStatus> => ipcRenderer.invoke(CHAT_SEND_CHANNEL, content) as Promise<ChatStatus>,
   clearConversation: (): Promise<ChatStatus> => ipcRenderer.invoke(CHAT_CLEAR_CHANNEL) as Promise<ChatStatus>,
+  cancelCurrentRequest: (): Promise<ChatStatus> => ipcRenderer.invoke(CHAT_CANCEL_CHANNEL) as Promise<ChatStatus>,
   readCharacterAsset: (id: CharacterAssetId): Promise<Uint8Array> =>
     ipcRenderer.invoke(CHARACTER_ASSET_CHANNEL, id) as Promise<Uint8Array>,
 };
@@ -57,6 +59,20 @@ const intelligence: IntelligenceBridge = {
   confirmTask: (input) => call(C.tasksConfirm, input),
   taskEvents: (input) => call(C.tasksEvents, input),
   codingBenchmark: () => call(C.codingBenchmark),
+  codingSnapshot: () => call(C.codingSnapshot),
+  codingSelectRepository: (nameOrPath) => call(C.codingSelectRepo, nameOrPath),
+  codingApprove: () => call(C.codingDecide, { decision: 'approve' }),
+  codingReject: (reason) => call(C.codingDecide, { decision: 'reject', ...(reason ? { reason } : {}) }),
+  codingCreateBranch: () => call(C.codingBranch),
+  codingApply: (input) => call(C.codingApply, input),
+  codingCreateRepository: (input) => call(C.codingCreateRepo, input),
+  codingRunCommand: (input) => call(C.codingRunCommand, input),
+  codingReview: () => call(C.codingReview),
+  codingComplete: (summary) => call(C.codingDecide, { decision: 'complete', ...(summary ? { summary } : {}) }),
+  codingCancel: (reason) => call(C.codingCancel, reason),
+  codingRestore: (taskId) => call(C.codingRestore, taskId),
+  codingConfirmResume: () => call(C.codingDecide, { decision: 'confirm' }),
+  codingDecide: (input) => call(C.codingDecide, input),
 };
 
 contextBridge.exposeInMainWorld('astra', bridge);

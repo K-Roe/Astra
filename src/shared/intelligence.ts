@@ -40,6 +40,21 @@ export const INTELLIGENCE_CHANNELS = {
   tasksConfirm: 'astra:tasks-confirm',
   tasksEvents: 'astra:tasks-events',
   codingBenchmark: 'astra:coding-benchmark',
+  codingSnapshot: 'astra:coding-snapshot',
+  codingSelectRepo: 'astra:coding-select-repo',
+  codingApprove: 'astra:coding-approve',
+  codingReject: 'astra:coding-reject',
+  codingBranch: 'astra:coding-branch',
+  codingApply: 'astra:coding-apply',
+  codingCreateRepo: 'astra:coding-create-repo',
+  codingRunCommand: 'astra:coding-run-command',
+  codingReview: 'astra:coding-review',
+  codingComplete: 'astra:coding-complete',
+  codingCancel: 'astra:coding-cancel',
+  codingRestore: 'astra:coding-restore',
+  codingConfirm: 'astra:coding-confirm',
+  codingEvents: 'astra:coding-events',
+  codingDecide: 'astra:coding-decide',
 } as const;
 
 /** The single permitted workspace root for repository work. */
@@ -75,6 +90,8 @@ export interface ProjectView {
   readonly testCommands: readonly string[];
   readonly fileCount: number;
   readonly description: string;
+  readonly branch?: string | null;
+  readonly clean?: boolean;
 }
 
 export interface IntelligenceBridge {
@@ -114,4 +131,62 @@ export interface IntelligenceBridge {
   confirmTask(input: { id: number }): Promise<unknown>;
   taskEvents(input: { id: number }): Promise<unknown[]>;
   codingBenchmark(): Promise<{ model: string; reliability: number; usableForCoding: boolean; note: string }>;
+
+  // ------------------------------------------------------- coding agent
+  /** The single authoritative task state, shared by chat and the workspace. */
+  codingSnapshot(): Promise<CodingTaskView>;
+  codingSelectRepository(nameOrPath: string): Promise<string>;
+  codingApprove(): Promise<CodingTaskView>;
+  codingReject(reason?: string): Promise<CodingTaskView>;
+  codingCreateBranch(): Promise<CodingTaskView>;
+  codingApply(input: {
+    patches?: { file: string; hunks: { find: string; replace: string }[] }[];
+    writes?: { file: string; content: string }[];
+  }): Promise<CodingTaskView>;
+  codingCreateRepository(input: { name: string; files: Record<string, string> }): Promise<CodingTaskView>;
+  codingRunCommand(input: { executable: string; args: string[] }): Promise<CodingTaskView>;
+  codingReview(): Promise<CodingTaskView>;
+  codingComplete(summary?: string): Promise<CodingTaskView>;
+  codingCancel(reason?: string): Promise<CodingTaskView>;
+  codingRestore(taskId: number): Promise<CodingTaskView>;
+  codingConfirmResume(): Promise<CodingTaskView>;
+  /**
+   * Single decision entry point. Approve, reject, complete and resume all run
+   * inside main so the renderer cannot advance the task past a check.
+   */
+  codingDecide(input: {
+    decision: 'approve' | 'reject' | 'complete' | 'confirm';
+    reason?: string;
+    summary?: string;
+  }): Promise<CodingTaskView>;
+}
+
+/** Serialisable view of the coding task, used by both views. */
+export interface CodingTaskView {
+  readonly taskId: number | null;
+  readonly repository: string | null;
+  readonly objective: string | null;
+  readonly phase: string;
+  readonly plan: {
+    readonly objective: string;
+    readonly repository: string;
+    readonly filesToChange: readonly string[];
+    readonly commands: readonly { executable: string; args: readonly string[]; purpose: string }[];
+    readonly expectedOutcome: string;
+    readonly risks: readonly string[];
+    readonly rootCause: string;
+    readonly investigationNotes: readonly string[];
+    readonly patches?: readonly { readonly file: string; readonly hunks: readonly { readonly find: string; readonly replace: string }[] }[];
+    readonly newRepository?: { readonly name: string; readonly files: Readonly<Record<string, string>> };
+    readonly correctionAttempt?: number;
+    readonly branch?: string | null;
+  } | null;
+  readonly approval: { requested: boolean; approved: boolean };
+  readonly changes: readonly { file: string; action: string; applied: number }[];
+  readonly testResults: readonly { command: string; cwd?: string; exitCode: number | null; ok: boolean; status?: 'passed' | 'failed' | 'skipped'; summary: string; output?: string; durationMs?: number; timedOut?: boolean; truncated?: boolean }[];
+  readonly diff: { diff: string; filesChanged: number; insertions: number; deletions: number } | null;
+  readonly workingTree: { branch: string | null; clean: boolean; staged: number; unstaged: number; untracked: number } | null;
+  readonly error: string | null;
+  readonly requiresConfirmation: boolean;
+  readonly events: readonly { id: number; at: string; kind: string; label: string; ok: boolean; detail?: string }[];
 }

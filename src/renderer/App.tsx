@@ -3,9 +3,11 @@ import type { AppInfo, ChatMessage, ChatStatus } from '../shared/contracts';
 import type { CharacterEvent, CharacterSignal } from '../shared/characterStateMachine';
 import { AvatarPanel } from './AvatarPanel';
 import { MessageContent } from './MessageContent';
-import { CodingWorkspace, ProjectsWorkspace } from './workspaces/Workspaces';
+import { CodingWorkspace } from './workspaces/CodingWorkspace';
+import { ProjectsWorkspace } from './workspaces/Workspaces';
 import { LearningWorkspace } from './workspaces/LearningWorkspace';
 import { presentationForChatPhase, type ChatPhase } from './presentationState';
+import type { CodingTaskView } from '../shared/intelligence';
 
 type WorkspaceId = 'conversation' | 'learning' | 'projects' | 'coding';
 
@@ -26,8 +28,13 @@ export function App() {
   const [scrolledUp, setScrolledUp] = useState(false);
   const [idleEnabled, setIdleEnabled] = useState(true);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceId>('conversation');
+  // Tool activity is shown as a distinct stream, never as a chat message, so a
+  // tool action can never be mistaken for something Astra said.
+  const [toolActivity, setToolActivity] = useState<{ id: number; kind: string; label: string; ok: boolean }[]>([]);
+  const [codingTask, setCodingTask] = useState<CodingTaskView | null>(null);
   const [characterSignal, setCharacterSignal] = useState<CharacterSignal>({ event: 'chat_interrupted', nonce: 0 });
   const requestId = useRef(0);
+  const lastCodingNotice = useRef('');
   const conversationRef = useRef<HTMLDivElement>(null);
   const followLatest = useRef(true);
 
@@ -151,6 +158,11 @@ export function App() {
     }
   }
 
+  async function cancelCurrentRequest(): Promise<void> {
+    try { await window.astra.cancelCurrentRequest(); }
+    catch { setDetail('Could not cancel the current request.'); }
+  }
+
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
@@ -164,6 +176,40 @@ export function App() {
   const statusLabel = phase === 'connecting' ? 'Connecting' : phase === 'generating' ? 'Generating' : phase === 'ready' ? 'Ready' : 'Error';
   const connectionLabel = phase === 'error' ? 'LOCAL MODEL NEEDS ATTENTION' : phase === 'connecting' ? 'CONNECTING TO OLLAMA' : 'GEMMA 3 4B · LOCAL OLLAMA';
   const presentationState = presentationForChatPhase(phase);
+
+  // Coding tool activity mirrors the authoritative task state, so it appears in
+  // chat and in the Coding workspace from one source.
+  useEffect(() => {
+    let active = true;
+    const poll = async () => {
+      try {
+        const snapshot = await window.astraIntelligence.codingSnapshot();
+        if (!active) return;
+        setCodingTask(snapshot);
+        const notice = `${snapshot.taskId}:${snapshot.phase}:${snapshot.plan?.correctionAttempt ?? 0}`;
+        if (snapshot.taskId && notice !== lastCodingNotice.current && (['completed', 'failed'].includes(snapshot.phase) || (snapshot.phase === 'awaiting_approval' && snapshot.plan?.correctionAttempt))) {
+          lastCodingNotice.current = notice;
+          void window.astra.getChatStatus().then((status) => { if (active) setMessages(status.messages); }).catch(() => undefined);
+        }
+        setToolActivity(
+          snapshot.events.slice(-12).map((event) => ({
+            id: event.id,
+            kind: event.kind,
+            label: event.label,
+            ok: event.ok,
+          })),
+        );
+      } catch {
+        // The bridge is unavailable before main finishes starting; retry.
+      }
+    };
+    void poll();
+    const timer = setInterval(poll, 900);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
 
   return (
     <main className="shell">
@@ -219,8 +265,33 @@ export function App() {
               {scrolledUp && <button type="button" className="jump-latest" onClick={jumpToLatest}>Jump to latest ↓</button>}
             </div>
 
-            <div className="conversation-bottom">
-              <div className="status-line" data-phase={phase}><p role="status">{detail}</p><div className="actions">{phase === 'error' && <button type="button" className="text-button" onClick={() => void refresh()}>Retry connection</button>}<button type="button" className="text-button" onClick={() => void clearConversation()} disabled={messages.length === 0 && !pending}>Clear conversation</button></div></div>
+              <div className="conversation-bottom">
+              {codingTask?.taskId && codingTask.phase === 'awaiting_approval' && !codingTask.requiresConfirmation ? (
+                <div className="coding-chat-control" role="group" aria-label="Coding plan decision" data-task-id={codingTask.taskId}>
+                  <strong>Plan awaiting approval for {codingTask.repository}</strong>
+                  <p>{codingTask.objective}</p>
+                  <p>Files: {codingTask.plan?.filesToChange.join(', ') || 'none'} · Commands: {codingTask.plan?.commands.map((c) => `${c.executable} ${c.args.join(' ')}`).join(', ') || 'none'}</p>
+                  <button type="button" onClick={() => void window.astraIntelligence.codingDecide({ decision: 'approve' })}>Approve plan</button>
+                  <button type="button" onClick={() => void window.astraIntelligence.codingDecide({ decision: 'reject' })}>Reject</button>
+                </div>
+              ) : null}
+              {codingTask?.taskId && ['implementing', 'testing', 'reviewing'].includes(codingTask.phase) ? (
+                <div className="coding-chat-control" role="status">Coding task: {codingTask.phase}. <button type="button" onClick={() => void window.astraIntelligence.codingCancel('cancelled in chat')}>Cancel task</button></div>
+              ) : null}
+              {codingTask?.taskId && ['completed', 'failed', 'cancelled'].includes(codingTask.phase) ? (
+                <div className="coding-chat-control" role="status">Coding task {codingTask.phase}. {codingTask.error ?? codingTask.testResults.at(-1)?.summary ?? 'Review the diff and activity in Coding.'}</div>
+              ) : null}
+              {toolActivity.length > 0 ? (
+                <div className="tool-activity" aria-label="Astra's tool activity" aria-live="polite">
+                  {toolActivity.slice(-4).map((event) => (
+                    <p key={event.id} className={`tool-line${event.ok ? '' : ' tool-line-error'}`}>
+                      <span className="tool-kind">{event.kind}</span>
+                      <span>{event.label}</span>
+                    </p>
+                  ))}
+                </div>
+              ) : null}
+              <div className="status-line" data-phase={phase}><p role="status">{detail}</p><div className="actions">{phase === 'error' && <button type="button" className="text-button" onClick={() => void refresh()}>Retry connection</button>}{phase === 'generating' && <button type="button" className="text-button" onClick={() => void cancelCurrentRequest()}>Cancel request</button>}<button type="button" className="text-button" onClick={() => void clearConversation()} disabled={messages.length === 0 && !pending}>Clear conversation</button></div></div>
               <form className="composer" onSubmit={(event) => void send(event)}><label htmlFor="message-input" className="sr-only">Message Astra</label><textarea id="message-input" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleKeyDown} placeholder="Message Astra…" rows={2} maxLength={8000} disabled={phase === 'connecting' || phase === 'generating'} /><button type="submit" className="send-button" disabled={!draft.trim() || phase === 'connecting' || phase === 'generating'}>Send <span aria-hidden="true">↗</span></button></form>
               <div className="conversation-footer"><div className="voice-reserved" aria-label="Future voice controls"><button type="button" disabled aria-label="Microphone unavailable">Mic unavailable</button><button type="button" disabled aria-label="Audio unavailable">Audio unavailable</button></div><span>LOCAL CHAT · MEMORY IS ON DISK</span></div>
             </div>
@@ -229,7 +300,7 @@ export function App() {
 
             {activeWorkspace === 'learning' ? <LearningWorkspace /> : null}
             {activeWorkspace === 'projects' ? <ProjectsWorkspace /> : null}
-            {activeWorkspace === 'coding' ? <CodingWorkspace /> : null}
+            {activeWorkspace === 'coding' ? <CodingWorkspace tellCharacter={tellCharacter} /> : null}
           </section>
         </div>
       </section>

@@ -1,9 +1,11 @@
 import { app, BrowserWindow, ipcMain, session } from 'electron';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import {
   APP_INFO_CHANNEL,
   CHAT_CLEAR_CHANNEL,
+  CHAT_CANCEL_CHANNEL,
   CHAT_SEND_CHANNEL,
   CHAT_STATUS_CHANNEL,
   CHARACTER_ASSET_CHANNEL,
@@ -19,6 +21,14 @@ import { INTELLIGENCE_CHANNELS } from '../shared/intelligence';
 let mainWindow: BrowserWindow | null = null;
 let chat: ChatService;
 let intelligence: IntelligenceService;
+
+// Acceptance runs must never attach to Karl's personal memory or task DB.
+const acceptanceProfile = process.env.ASTRA_CA01_PROFILE;
+if (process.argv.includes('--ca01-acceptance') && acceptanceProfile) {
+  const resolved = path.resolve(acceptanceProfile);
+  if (!resolved.startsWith(path.resolve(os.tmpdir()) + path.sep)) throw new Error('CA-01 acceptance profile must be disposable and under TEMP');
+  app.setPath('userData', resolved);
+}
 
 /**
  * Vite may emit the model with a content hash or copy it verbatim from
@@ -73,6 +83,7 @@ function registerIpc(): void {
   ipcMain.handle(CHAT_STATUS_CHANNEL, (event) => { requirePrimaryFrame(event); return chat.getStatus(); });
   ipcMain.handle(CHAT_SEND_CHANNEL, (event, content: unknown) => { requirePrimaryFrame(event); return chat.send(content); });
   ipcMain.handle(CHAT_CLEAR_CHANNEL, (event) => { requirePrimaryFrame(event); return chat.clearConversation(); });
+  ipcMain.handle(CHAT_CANCEL_CHANNEL, (event) => { requirePrimaryFrame(event); return chat.cancelCurrentRequest(); });
   ipcMain.handle(CHARACTER_ASSET_CHANNEL, async (event, id: unknown): Promise<Uint8Array> => {
     requirePrimaryFrame(event);
     if (typeof id !== 'string' || !CHARACTER_ASSET_IDS.includes(id as CharacterAssetId)) {
@@ -135,6 +146,17 @@ function registerIntelligenceIpc(): void {
   ipcMain.handle(C.tasksConfirm, guard((input: never) => intelligence.confirmTask(input)));
   ipcMain.handle(C.tasksEvents, guard((input: never) => intelligence.taskEvents(input)));
   ipcMain.handle(C.codingBenchmark, guard(() => intelligence.codingBenchmark()));
+  ipcMain.handle(C.codingSnapshot, guard(() => intelligence.codingSnapshot()));
+  ipcMain.handle(C.codingSelectRepo, guard((nameOrPath: never) => intelligence.codingSelectRepository(nameOrPath)));
+  ipcMain.handle(C.codingDecide, guard((input: never) => intelligence.codingDecide(input)));
+  ipcMain.handle(C.codingBranch, guard(() => intelligence.codingCreateBranch()));
+  ipcMain.handle(C.codingApply, guard((input: never) => intelligence.codingApply(input)));
+  ipcMain.handle(C.codingCreateRepo, guard((input: never) => intelligence.codingCreateRepository(input)));
+  ipcMain.handle(C.codingRunCommand, guard((input: never) => intelligence.codingRunCommand(input)));
+  ipcMain.handle(C.codingReview, guard(() => intelligence.codingReview()));
+  ipcMain.handle(C.codingCancel, guard((reason: never) => intelligence.codingCancel(reason)));
+  ipcMain.handle(C.codingRestore, guard((taskId: never) => intelligence.codingRestore(taskId)));
+  ipcMain.handle(C.codingEvents, guard(() => intelligence.codingSnapshot()));
 }
 
 function createWindow(): void {
@@ -151,7 +173,7 @@ void app.whenReady().then(async () => {
   // Chat is grounded in the knowledge base, so the service is created first and
   // its retrieval hook is handed to the conversation layer.
   intelligence = new IntelligenceService({ databasePath: defaultDatabasePath() });
-  chat = new ChatService(personality, fetch, (query: string) => intelligence.groundQuery(query));
+  chat = new ChatService(personality, fetch, (query: string) => intelligence.groundQuery(query), intelligence.codingBridge);
   // Anything mid-flight at shutdown is recovered for review, never resumed.
   const interrupted = intelligence.recoverInterruptedTasks();
   if (interrupted.length > 0) {
@@ -164,7 +186,11 @@ void app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => {
+let shutdownStarted = false;
+app.on('before-quit', (event) => {
+  if (shutdownStarted) return;
+  event.preventDefault();
+  shutdownStarted = true;
   chat?.shutdown();
-  intelligence?.close();
+  void intelligence?.shutdown().finally(() => app.quit());
 });

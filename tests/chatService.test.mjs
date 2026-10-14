@@ -129,3 +129,19 @@ test('clearing while a reply is pending prevents stale history', async () => {
   await assert.rejects(pending, /Conversation was cleared/);
   assert.equal((await service.getStatus()).messages.length, 0);
 });
+
+test('a coding-model proposal can be cancelled without creating a plan', async () => {
+  const coding = {
+    onActivity: () => () => {},
+    handle: (_text, signal) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(Object.assign(new Error('cancelled'), { name: 'AbortError' })), { once: true });
+    }),
+  };
+  const service = new ChatService('Astra personality', mockOllama().request, undefined, coding);
+  const pending = service.send('Investigate why the tests fail');
+  service.cancelCurrentRequest();
+  const status = await pending;
+  assert.equal(status.state, 'ready');
+  assert.match(status.messages.at(-1).content, /investigation cancelled/i);
+  assert.equal(status.messages.length, 2);
+});

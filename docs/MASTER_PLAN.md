@@ -2,6 +2,8 @@
 
 ## Goal and constraints
 
+**CA-01 continuation, 2026-10-14: COMPLETE.** The approved chat-to-code path and verification record are in `docs/CA_01.md`. Live failed-test correction, cancellation, restart recovery, scaffold structure and native malformed-model fail-closed behavior passed acceptance. A scaffold build requires separately approved dependency installation. Dependency installation remains separately gated; do not start CA-02 automatically.
+
 Build a standalone Windows AI companion named Astra with a predefined personality, local coding-capable inference, portable personal memory, voice interaction, and permission-controlled computer tools. The default operating path must work without network access after required local software and models are installed. No existing assistant history or memory is seeded into Astra.
 
 Approved stack: Electron, React + TypeScript, Node.js + TypeScript, Ollama, SQLite, Windows first. Vue is prohibited. Paid APIs and subscriptions require Karl's prior approval. Target hardware is Ryzen 5 5500, RTX 3050 8 GB VRAM, 16 GB RAM, NVMe SSD. Candidate models are a quantized Qwen2.5-Coder 7B and a smaller general-purpose model; selection requires a measured benchmark.

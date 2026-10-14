@@ -1,6 +1,8 @@
 # Project ASTRA architecture
 
-The Electron desktop shell, session-only Ollama conversation and LW-01 procedural 3D viewport are implemented. Persistent memory, tools, voice and website research remain planned; they do not exist yet.
+**CA-01 coding orchestration, 2026-10-14.** `ChatService` routes coding intent through `CodingBridge`; `CodingAgent` in Electron main is the single task engine for chat and Coding. `codingModel.ts` requests bounded JSON from local Qwen and validates listed files and exact patch hunks. Plans bind repository, patch, scaffold, branch and command arrays to explicit approval; a failed check permits one same-scope correction with fresh approval, reusing the task branch. `TaskStore` persists state; unfinished tasks require confirmation and fresh approval. `commandRunner.ts` remains shell-free, launching Windows npm through Node's installed CLI, with installation denied. The renderer gets snapshots and narrow IPC methods, not Node. Detailed flow and PARTIAL limits: `docs/CA_01.md`.
+
+The original LW-01 snapshot below describes the early Electron desktop shell, session-only Ollama conversation and procedural 3D viewport. Intelligence V1 subsequently added persistent memory, repository tools and approved website learning; CA-01 connects its coding tools to chat. Voice remains planned.
 
 ## Boundaries and data flow
 

@@ -208,6 +208,24 @@ export async function gitStatus(root: string, sandbox: SandboxOptions): Promise<
   return { branch, staged, unstaged, untracked, lines, clean: lines.length === 0 || (lines.length === 1 && lines[0].startsWith('##')) };
 }
 
+/** Unquoted repository-relative dirty paths, including names with spaces. */
+export async function gitDirtyPaths(root: string, sandbox: SandboxOptions): Promise<string[]> {
+  const result = await runGit(root, sandbox, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  if (!result.ok) throw new FileToolError(`git status failed: ${result.stderr.slice(0, 200)}`);
+  const entries = result.stdout.split('\0').filter(Boolean);
+  const paths: string[] = [];
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i];
+    if (entry.length < 4 || entry[2] !== ' ') throw new FileToolError('unrecognised Git status entry');
+    paths.push(entry.slice(3));
+    if (entry[0] === 'R' || entry[1] === 'R' || entry[0] === 'C' || entry[1] === 'C') {
+      if (++i >= entries.length) throw new FileToolError('incomplete Git rename status');
+      paths.push(entries[i]);
+    }
+  }
+  return paths;
+}
+
 export interface GitDiff {
   readonly diff: string;
   readonly filesChanged: number;
@@ -219,7 +237,7 @@ export interface GitDiff {
 export async function gitDiff(
   root: string,
   sandbox: SandboxOptions,
-  options: { staged?: boolean; ref?: string; maxChars?: number } = {},
+  options: { staged?: boolean; ref?: string; maxChars?: number; paths?: readonly string[] } = {},
 ): Promise<GitDiff> {
   const maxChars = options.maxChars ?? 200_000;
   const args = options.staged
@@ -227,8 +245,21 @@ export async function gitDiff(
     : options.ref
       ? ['diff', `${options.ref}..HEAD`]
       : ['diff', 'HEAD'];
-  const result = await runGit(root, sandbox, [...args, '--unified=3']);
-  const diff = result.stdout.slice(0, maxChars);
+  const limited = options.paths?.map((file) => path.relative(root, resolveWithinRootNotRoot(path.resolve(root, file), { root }))) ?? [];
+  const result = await runGit(root, sandbox, [...args, '--unified=3', ...(limited.length ? ['--', ...limited] : [])]);
+  let diff = result.stdout;
+  if (!result.ok && !options.staged && !options.ref && limited.length && /unknown revision|ambiguous argument|bad revision/i.test(result.stderr)) {
+    // A newly initialised repository has no HEAD. Ask Git for each real file's
+    // diff against an empty file; this also includes untracked scaffold files.
+    diff = '';
+    for (const file of limited) {
+      const untracked = await runGit(root, sandbox, ['diff', '--no-index', '--', '/dev/null', file]);
+      diff += untracked.stdout;
+    }
+  } else if (!result.ok) {
+    throw new FileToolError(`git diff failed: ${result.stderr.slice(0, 200)}`);
+  }
+  diff = diff.slice(0, maxChars);
   const filesChanged = (diff.match(/^diff --git /gm) ?? []).length;
   let insertions = 0;
   let deletions = 0;

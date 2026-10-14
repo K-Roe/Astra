@@ -97,7 +97,7 @@ export class TaskStore {
   /** The most recent task that is not finished. */
   active(): CodingTask | undefined {
     const row = this.db.get<Record<string, unknown>>(
-      "SELECT * FROM coding_tasks WHERE state NOT IN ('completed','cancelled') ORDER BY id DESC LIMIT 1",
+      "SELECT * FROM coding_tasks WHERE state NOT IN ('completed','cancelled','failed') ORDER BY id DESC LIMIT 1",
     );
     return row ? toTask(row) : undefined;
   }
@@ -204,8 +204,8 @@ export class TaskStore {
   confirmResume(id: number): CodingTask {
     const task = this.require(id);
     if (TERMINAL_STATES.has(task.state)) throw new Error('a finished task cannot be resumed');
-    this.db.run('UPDATE coding_tasks SET requires_confirm = 0, updated_at = ? WHERE id = ?', new Date().toISOString(), id);
-    this.event(id, 'resumed', 'Karl confirmed continuation');
+    this.db.run("UPDATE coding_tasks SET requires_confirm = 0, state = 'awaiting_approval', updated_at = ? WHERE id = ?", new Date().toISOString(), id);
+    this.event(id, 'resumed', 'Karl confirmed review; fresh plan approval is required');
     return this.require(id);
   }
 

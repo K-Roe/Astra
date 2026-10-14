@@ -2,6 +2,7 @@ export const APP_INFO_CHANNEL = 'astra:app-info' as const;
 export const CHAT_STATUS_CHANNEL = 'astra:chat-status' as const;
 export const CHAT_SEND_CHANNEL = 'astra:chat-send' as const;
 export const CHAT_CLEAR_CHANNEL = 'astra:chat-clear' as const;
+export const CHAT_CANCEL_CHANNEL = 'astra:chat-cancel-current' as const;
 export const CHARACTER_ASSET_CHANNEL = 'astra:character-asset' as const;
 
 /**
@@ -32,6 +33,7 @@ export interface AstraBridge {
   getChatStatus(): Promise<ChatStatus>;
   sendMessage(content: string): Promise<ChatStatus>;
   clearConversation(): Promise<ChatStatus>;
+  cancelCurrentRequest(): Promise<ChatStatus>;
   /**
    * Reads a bundled character model. The renderer runs sandboxed with no file
    * access, and `fetch` is unavailable for `file://` URLs, so the bytes come

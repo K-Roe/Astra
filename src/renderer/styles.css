@@ -167,3 +167,14 @@ h1 { margin: 0; font-size: 1.52rem; font-weight: 800; letter-spacing: .23em; lin
 .workspace-status.ok { background: #16301f; color: #b6f0c6; }
 .workspace-status.error { background: #331520; color: #ffc2ce; }
 .workspace-status.busy { background: #1f1836; color: #d6c4f5; }
+/* ------------------------------------------------------- coding task stream */
+.tool-activity { display: flex; flex-direction: column; gap: 3px; max-height: 74px; overflow-y: auto; margin-bottom: 8px; padding: 7px 9px; border: 1px solid #33264a; border-radius: 8px; background: #150e21; }
+.tool-line { display: flex; gap: 8px; align-items: baseline; margin: 0; font-size: .66rem; color: #d8c4ee; }
+.tool-line > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-line-error { color: #ffc2ce; }
+.coding-chat-control { max-height: 90px; overflow-y: auto; margin-bottom: 8px; padding: 7px 9px; border: 1px solid #5f477a; border-radius: 8px; font-size: .68rem; }
+.coding-chat-control p { margin: 3px 0; }
+.tool-kind { flex: 0 0 auto; padding: 1px 5px; border-radius: 4px; background: #2a1d3a; color: #c9a8ff; font-size: .58rem; font-weight: 700; text-transform: uppercase; }
+.workspace select { padding: 6px 8px; border: 1px solid #4a3760; border-radius: 7px; background: #120c1c; color: #f4ecff; font: inherit; font-size: .74rem; }
+.diff-view { max-height: 260px; overflow: auto; margin: 0; padding: 8px; border: 1px solid #33264a; border-radius: 7px; background: #100b18; color: #cbb8e6; font-family: ui-monospace, Consolas, monospace; font-size: .62rem; line-height: 1.45; white-space: pre; }
+@media (max-width: 820px) { .tool-activity { max-height: 39px; margin-bottom: 3px; padding: 3px 6px; } .coding-chat-control { max-height: 68px; margin-bottom: 3px; } }

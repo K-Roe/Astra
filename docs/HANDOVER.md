@@ -2,6 +2,10 @@
 
 ## Current Intelligence V1 handover (2026-10-13)
 
+**CA-01 handover, 2026-10-14: COMPLETE.** Karl's Intelligence V1 checkpoint was `b32bdb0`; CA-01 was reviewed for a local checkpoint on `main`. Start with `docs/CA_01.md` and the actual Git diff. Chat proposes validated Qwen patches, accepts approval in chat/Coding, applies approved files, runs approved tests and shows a diff. Disposable native acceptance passed 74/74, including a real two-stage failed-test correction with fresh approval, hostile output rejection and malformed Qwen fail-closed behavior; `npm test` passed 235/235, lint passed, and the final native verifier passed with clean exit. Partly applied work requires manual review, and the scaffold has not been built without dependencies. No push was made. Keep installation blocked and do not start CA-02.
+
+`.gitignore` had hidden `src/main/models/codingBenchmark.ts`, which `b32bdb0` does not contain. The CA-01 checkpoint includes this required TypeScript source; a clean checkout of the earlier Intelligence V1 HEAD lacks that imported file.
+
 **Read `docs/INTELLIGENCE_V1.md` first.** It is the architecture and operating manual: process layout, database schema, SSRF defences, the repository sandbox, the command runner, approvals, the task lifecycle, model routing and the measured benchmark.
 
 **Where things stand.** Astra can learn from approved documentation, remember things including corrections, answer from stored sources with real citations and admit ignorance, discover and inspect repositories under `C:\Users\karlr\repos`, edit an authorised repository through structured patches, run allowlisted commands, and persist coding tasks that never auto-resume after a restart. **176/176 unit tests, 39/39 acceptance checks, native desktop verification passing.** Nothing has been committed or pushed.

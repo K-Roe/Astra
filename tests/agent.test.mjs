@@ -109,7 +109,8 @@ test('a restart recovers the task but refuses to resume work without confirmatio
 
     const confirmed = restored.confirmResume(task.id);
     assert.equal(confirmed.requiresConfirm, false);
-    assert.equal(restored.mayExecute(confirmed), true, 'work may continue only after Karl confirms');
+    assert.equal(confirmed.state, 'awaiting_approval');
+    assert.equal(restored.mayExecute(confirmed), false, 'the plan still needs fresh approval');
     reopened.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });

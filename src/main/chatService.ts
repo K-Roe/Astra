@@ -5,6 +5,7 @@ import {
   referenceBlock,
   type GroundingContext,
 } from './knowledge/grounding';
+import type { CodingBridge } from './agent/codingBridge';
 
 export const MODEL_NAME = 'gemma3:4b';
 export const MODEL_DIGEST = 'c30276f7dffec93a536d283e15088990454b8d21cf180a3d6eea4959e4147291';
@@ -35,6 +36,8 @@ interface OllamaChat {
 export class ChatService {
   private readonly history: ChatMessage[] = [];
   private active: AbortController | null = null;
+  private codingBusy = false;
+  private codingAbort: AbortController | null = null;
   private generation = 0;
   private detail = 'Local model ready. Conversation stays in this running session.';
 
@@ -43,7 +46,20 @@ export class ChatService {
     private readonly request: typeof fetch = fetch,
     /** Optional retrieval hook; absent means a plain, unsourced conversation. */
     private readonly grounder?: (query: string) => GroundingContext,
-  ) {}
+    /** Optional coding tool bridge; absent means chat cannot act on repositories. */
+    private readonly coding?: CodingBridge,
+  ) {
+    this.coding?.onActivity((event, snapshot) => {
+      if (event.kind === 'task.completed') {
+        const last = snapshot.testResults.at(-1);
+        this.history.push({ role: 'assistant', content: `Coding task #${snapshot.taskId} completed in ${snapshot.repository}. ${last ? `${snapshot.testResults.filter((result) => result.ok).length}/${snapshot.testResults.length} approved checks passed. ` : 'No executable checks were run. '}${snapshot.diff ? `Git diff: ${snapshot.diff.filesChanged} file(s), +${snapshot.diff.insertions}/-${snapshot.diff.deletions}.` : 'No Git diff was available.'} Review the full diff in Coding.` });
+      } else if (event.kind === 'task.failed') {
+        this.history.push({ role: 'assistant', content: `Coding task #${snapshot.taskId} failed: ${snapshot.error ?? event.label}. Review the test output and changed files in Coding.` });
+      } else if (event.kind === 'plan.correction') {
+        this.history.push({ role: 'assistant', content: `The approved check failed. I proposed one bounded correction in the same repository and file scope. Review the revised patch and explicitly approve it before any further edit or command.` });
+      }
+    });
+  }
 
   private async post<T>(route: string, body: object, signal: AbortSignal): Promise<T> {
     const response = await this.request(`${OLLAMA_URL}${route}`, {
@@ -99,11 +115,37 @@ export class ChatService {
   }
 
   async send(content: unknown): Promise<ChatStatus> {
-    if (this.active) throw new Error('A response is already generating.');
+    if (this.active || this.codingBusy) throw new Error('A response is already generating.');
     if (typeof content !== 'string' || !content.trim() || content.length > MAX_MESSAGE_LENGTH) {
       throw new Error(`Enter a message of 1 to ${MAX_MESSAGE_LENGTH} characters.`);
     }
     const text = content.trim();
+
+    // A coding instruction is handled by real tools, not by the language model.
+    // This runs before Ollama so a coding request never becomes a hallucinated
+    // description of work that was never done.
+    if (this.coding) {
+      this.codingBusy = true;
+      const codingGeneration = this.generation;
+      const codingController = new AbortController();
+      this.codingAbort = codingController;
+      let toolResult;
+      try { toolResult = await this.coding.handle(text, codingController.signal); }
+      catch (error) {
+        if (!codingController.signal.aborted) throw error;
+        if (codingGeneration === this.generation) this.history.push({ role: 'user', content: text }, { role: 'assistant', content: 'Coding investigation cancelled. No plan was approved and no file was changed.' });
+        this.detail = 'Coding investigation cancelled.';
+        return this.snapshot('ready');
+      } finally { this.codingBusy = false; this.codingAbort = null; }
+      if (toolResult) {
+        this.history.push({ role: 'user', content: text }, { role: 'assistant', content: toolResult.reply });
+        this.detail = toolResult.snapshot
+          ? `Coding task state: ${toolResult.snapshot.phase}.`
+          : 'Local model ready. Nothing in the knowledge base matched, so this reply is not sourced.';
+        return this.snapshot('ready');
+      }
+    }
+
     const controller = new AbortController();
     this.active = controller;
     const requestGeneration = this.generation;
@@ -124,7 +166,7 @@ export class ChatService {
           ? 'You have no stored reference material for this question.'
           : `Reference material follows.\n\n${reference}`,
         guidance,
-        'You cannot take actions, run commands, or access files in this build. Never claim that you did.',
+        'Ordinary conversation cannot take actions or run commands. The separate coding workflow records real tool activity and approvals. Never claim an action occurred unless a recorded tool result confirms it.',
       ].join('\n\n');
 
       const messages = [
@@ -158,6 +200,11 @@ export class ChatService {
         : 'Local model ready. Nothing in the knowledge base matched, so this reply is not sourced.';
       return this.snapshot('ready');
     } catch (error) {
+      if (controller.signal.aborted && requestGeneration === this.generation) {
+        this.history.push({ role: 'user', content: text }, { role: 'assistant', content: 'Response cancelled.' });
+        this.detail = 'Response cancelled.';
+        return this.snapshot('ready');
+      }
       this.detail = this.describe(error);
       throw new Error(this.detail, { cause: error });
     } finally {
@@ -168,6 +215,7 @@ export class ChatService {
   clearConversation(): ChatStatus {
     this.generation++;
     this.active?.abort();
+    this.codingAbort?.abort();
     this.active = null;
     this.history.length = 0;
     this.detail = 'Conversation cleared. No messages are saved across restarts.';
@@ -176,7 +224,14 @@ export class ChatService {
 
   shutdown(): void {
     this.active?.abort();
+    this.codingAbort?.abort();
     this.active = null;
     this.history.length = 0;
+  }
+
+  cancelCurrentRequest(): ChatStatus {
+    this.codingAbort?.abort();
+    this.active?.abort();
+    return this.snapshot('ready');
   }
 }

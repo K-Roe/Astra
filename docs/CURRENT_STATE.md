@@ -2,6 +2,10 @@
 
 ## Intelligence V1 — persistent knowledge, approved research and coding tools (2026-10-13)
 
+**CA-01 status, 2026-10-14: COMPLETE.** Karl's Intelligence V1 checkpoint is `b32bdb0`; CA-01 was reviewed for a local checkpoint after complete acceptance and has not been pushed. Disposable native Electron acceptance passed 74/74: chat inspection, a genuine failed-test correction with two Qwen proposals and fresh chat UI approval, real patch/test/diff, shared Coding view, React/TypeScript repository creation, rejection, dirty-tree and reparse-point protection, cancellation, interrupted-test recovery, malformed-model fail-closed behavior, Learning UI fetch, memory and Gemma. `npm test` passed 235/235, lint passed, and the final native verifier passed with clean exit. See `docs/CA_01.md` for architecture, evidence and exact limits.
+
+**Git continuity finding:** `.gitignore` accidentally hid `src/main/models/codingBenchmark.ts` from the Intelligence V1 checkpoint. CA-01 exposes and includes that source in its reviewed checkpoint. Do not assume `b32bdb0` alone is buildable from a clean clone.
+
 Karl approved Intelligence V1 on 2026-10-13. Full architecture and operating
 detail is in `docs/INTELLIGENCE_V1.md`; this entry records what was actually
 executed and verified.

@@ -1,5 +1,7 @@
 # Project ASTRA decisions
 
+**CA-01 decisions, 2026-10-14.** Deterministic intent routing handles chat; local Qwen supplies only a bounded JSON patch proposal, never authority or commands. Approval binds the exact patch/scaffold, repository, command array and branch. A changed patch requires renewed approval. Execution stays in Electron main with shared chat/Coding state. On restart tasks require confirmation and fresh approval; native acceptance verified interrupted-test continuation. A failed approved check permits one same-file correction proposal; the correction reuses the task branch and needs fresh approval. Dependency installation remains blocked. Native malformed-output fault injection confirmed two bounded retries and no edit or command. CA-01 is COMPLETE within the verified limits in `docs/CA_01.md`.
+
 Decision status is explicit. **Approved** reflects Karl's mission instructions; **Proposed** is a design assumption for later review, not permission to implement it. Changes to approved choices require Karl's approval and a new record.
 
 ## ADR-001 — Standalone identity and empty personal memory (Approved, 2026-10-13)

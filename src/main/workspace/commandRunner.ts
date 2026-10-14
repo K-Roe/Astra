@@ -53,6 +53,7 @@ export interface CommandRequest {
   readonly cwd: string;
   readonly purpose: string;
   readonly timeoutMs?: number;
+  readonly signal?: AbortSignal;
 }
 
 export interface CommandResult {
@@ -136,15 +137,26 @@ export async function runApprovedCommand(
   assertCommandAllowed(request, policy);
 
   const cwd = resolveWithinRoot(request.cwd, sandbox);
-  const executablePath = resolveExecutable(request.executable);
+  let executablePath = resolveExecutable(request.executable);
   if (!executablePath) throw new CommandRejected(`could not find executable "${request.executable}"`);
+  let spawnArgs = [...request.args];
+  if (baseName(request.executable) === 'npm' && process.platform === 'win32') {
+    // Windows cannot spawn npm.cmd without a shell. Launch npm's installed
+    // CLI through the trusted Node executable; script execution still requires
+    // the task's explicit command approval and npm subcommand allowlist.
+    const nodePath = resolveExecutable('node');
+    const cliPath = nodePath ? path.join(path.dirname(nodePath), 'node_modules', 'npm', 'bin', 'npm-cli.js') : '';
+    if (!nodePath || !existsSync(cliPath)) throw new CommandRejected('the local npm CLI is unavailable without a shell');
+    executablePath = nodePath;
+    spawnArgs = [cliPath, ...request.args];
+  }
 
   const timeoutMs = Math.min(request.timeoutMs ?? policy.defaultTimeoutMs, policy.maxTimeoutMs);
   const started = Date.now();
   const display = `${baseName(request.executable)} ${request.args.join(' ')}`.trim();
 
   return new Promise<CommandResult>((resolve) => {
-    const child = spawn(executablePath, [...request.args], {
+    const child = spawn(executablePath, spawnArgs, {
       cwd,
       shell: false,
       windowsHide: true,
@@ -197,9 +209,13 @@ export async function runApprovedCommand(
       timedOut = true;
       killTree();
     }, timeoutMs);
+    const onAbort = (): void => killTree();
+    request.signal?.addEventListener('abort', onAbort, { once: true });
+    if (request.signal?.aborted) onAbort();
 
     child.on('error', (error) => {
       clearTimeout(timer);
+      request.signal?.removeEventListener('abort', onAbort);
       resolve({
         ok: false, code: null, signal: null,
         stdout, stderr: `${stderr}\n${error.message}`, truncated, timedOut,
@@ -209,8 +225,9 @@ export async function runApprovedCommand(
 
     child.on('close', (code, signal) => {
       clearTimeout(timer);
+      request.signal?.removeEventListener('abort', onAbort);
       resolve({
-        ok: code === 0 && !timedOut,
+        ok: code === 0 && !timedOut && !request.signal?.aborted,
         code,
         signal,
         stdout,

@@ -31,6 +31,12 @@ export type CharacterEvent =
   | 'chat_interrupted'
   | 'user_wave'
   | 'user_center'
+  // Coding-phase presentation only. These change what Astra looks like; they
+  // never grant permission, run a tool or touch a file.
+  | 'coding_investigating'
+  | 'coding_working'
+  | 'coding_complete'
+  | 'coding_failed'
   | 'go_to'
   | 'go_to_seat'
   | 'activity'
@@ -93,6 +99,16 @@ export function nextState(current: CharacterState, event: CharacterEvent): Chara
       return current === 'seated' ? 'seated' : 'idle';
     case 'user_wave':
       return current === 'seated' ? 'seated' : 'waving';
+    // Coding-phase presentation. Investigating and working read as thinking and
+    // a desk activity; completion is a small happy reaction; failure is
+    // deliberately subtle. None of these can authorise anything.
+    case 'coding_investigating':
+    case 'coding_working':
+      return 'thinking';
+    case 'coding_complete':
+      return current === 'seated' ? 'seated' : 'waving';
+    case 'coding_failed':
+      return current === 'seated' ? 'seated' : 'interacting';
     default:
       break;
   }
