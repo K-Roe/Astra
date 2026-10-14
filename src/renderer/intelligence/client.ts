@@ -37,9 +37,15 @@ export const learning = {
 
 export const memory = {
   list: () => attempt(() => intelligence().listMemory()),
-  remember: (statement: string) => attempt(() => intelligence().rememberMemory({ statement })),
+  listAll: () => attempt(() => intelligence().listAllMemory()),
+  summary: () => attempt(() => intelligence().memorySummary()),
+  remember: (input: { statement: string; category?: string; subject?: string }) => attempt(() => intelligence().rememberMemory(input)),
   correct: (original: string, corrected: string, reason = '') => attempt(() => intelligence().correctMemory(original, corrected, reason)),
+  update: (input: { id: number; statement?: string; category?: string; subject?: string }) => attempt(() => intelligence().updateMemory(input)),
   forget: (id: number) => attempt(() => intelligence().forgetMemory(id)),
+  forgetText: (text: string) => attempt(() => intelligence().forgetMemoryText(text)),
+  suggestions: () => attempt(() => intelligence().memorySuggestionsEnabled()),
+  setSuggestions: (enabled: boolean) => attempt(() => intelligence().setMemorySuggestions(enabled)),
   corrections: () => attempt(() => intelligence().listCorrections()),
 };
 

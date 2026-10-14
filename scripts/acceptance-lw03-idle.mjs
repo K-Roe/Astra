@@ -87,7 +87,7 @@ function resources(pid) {
 const port = await freePort();
 const env = { ...process.env, ASTRA_CA01_PROFILE: profile };
 delete env.ELECTRON_RUN_AS_NODE;
-const child = spawn(electron, ['.', '--ca01-acceptance', `--remote-debugging-port=${port}`], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
+const child = spawn(electron, ['.', '--ca01-acceptance', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', `--remote-debugging-port=${port}`], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
 let page;
 let browser;
 let target;

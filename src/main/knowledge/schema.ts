@@ -155,6 +155,38 @@ export const MIGRATIONS: readonly Migration[] = [
       )`,
     ],
   },
+{
+    version: 3,
+    name: 'personal memory status, provenance and settings',
+    statements: [
+      // Personal memory V1 extends the existing memory table rather than
+      // creating a second, incompatible store. `active` stays authoritative
+      // for retrieval; `status` is the readable lifecycle label and is written
+      // together with it so the two can never disagree.
+      `ALTER TABLE memory ADD COLUMN subject TEXT NOT NULL DEFAULT ''`,
+      `ALTER TABLE memory ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`,
+      `ALTER TABLE memory ADD COLUMN origin TEXT NOT NULL DEFAULT 'user_stated'`,
+      `ALTER TABLE memory ADD COLUMN sensitivity TEXT NOT NULL DEFAULT 'normal'`,
+      `ALTER TABLE memory ADD COLUMN conversation_ref TEXT`,
+      `ALTER TABLE memory ADD COLUMN forgotten_at TEXT`,
+      `ALTER TABLE memory ADD COLUMN superseded_reason TEXT`,
+      `CREATE INDEX memory_subject_idx ON memory(subject, active)`,
+      // Every lifecycle change is auditable, so a forgotten memory can be
+      // explained and a stale cache can be detected by revision.
+      `CREATE TABLE memory_events (
+        id        INTEGER PRIMARY KEY,
+        memory_id INTEGER REFERENCES memory(id) ON DELETE CASCADE,
+        at        TEXT NOT NULL,
+        kind      TEXT NOT NULL,
+        detail    TEXT NOT NULL DEFAULT ''
+      )`,
+      `CREATE TABLE settings (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    ],
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

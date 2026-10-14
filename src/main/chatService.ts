@@ -6,6 +6,23 @@ import {
   type GroundingContext,
 } from './knowledge/grounding';
 import type { CodingBridge } from './agent/codingBridge';
+import type { MemoryCommandResult } from './memory/memoryCommands';
+import type { PersonalMemorySummary } from './memory/personalMemory';
+
+/**
+ * The slice of personal memory the chat layer is allowed to use.
+ *
+ * Deliberately narrow: chat may ask for a bounded context block, may run a
+ * validated memory command, and may report the startup summary. It cannot reach
+ * the database, the research store or anything privileged.
+ */
+export interface MemoryChatPort {
+  handle(text: string): MemoryCommandResult;
+  contextFor(query: string): { relevant: readonly { category: string; statement: string }[]; summary: readonly { category: string; statement: string }[] };
+  summary(): PersonalMemorySummary;
+  suggestionsEnabled(): boolean;
+  conversationRef(): string;
+}
 
 export const MODEL_NAME = 'gemma3:4b';
 export const MODEL_DIGEST = 'c30276f7dffec93a536d283e15088990454b8d21cf180a3d6eea4959e4147291';
@@ -40,6 +57,7 @@ export class ChatService {
   private codingAbort: AbortController | null = null;
   private generation = 0;
   private detail = 'Local model ready. Conversation stays in this running session.';
+  private memorySuggestion: { text: string; subject: string } | null = null;
 
   constructor(
     private readonly personality: string,
@@ -48,6 +66,8 @@ export class ChatService {
     private readonly grounder?: (query: string) => GroundingContext,
     /** Optional coding tool bridge; absent means chat cannot act on repositories. */
     private readonly coding?: CodingBridge,
+    /** Optional personal memory port; absent means chat has no memory at all. */
+    private readonly memory?: MemoryChatPort,
   ) {
     this.coding?.onActivity((event, snapshot) => {
       if (event.kind === 'task.completed') {
@@ -90,7 +110,13 @@ export class ChatService {
   }
 
   private snapshot(state: ChatStatus['state']): ChatStatus {
-    return { state, detail: this.detail, messages: this.history.map((message) => ({ ...message })) };
+    return {
+      state,
+      detail: this.detail,
+      messages: this.history.map((message) => ({ ...message })),
+      memorySuggestion: this.memorySuggestion ? { ...this.memorySuggestion } : null,
+      memoryCount: this.memory?.summary().count ?? 0,
+    };
   }
 
   async getStatus(): Promise<ChatStatus> {
@@ -120,6 +146,20 @@ export class ChatService {
       throw new Error(`Enter a message of 1 to ${MAX_MESSAGE_LENGTH} characters.`);
     }
     const text = content.trim();
+
+    // Personal memory is handled before anything else, and by a trusted
+    // service rather than the model. Only text Karl typed can reach it.
+    if (this.memory) {
+      const command = this.memory.handle(text);
+      this.memorySuggestion = command.suggestion ? { ...command.suggestion } : null;
+      if (command.handled && command.reply) {
+        this.history.push({ role: 'user', content: text }, { role: 'assistant', content: command.reply });
+        this.detail = command.ok === false
+          ? 'That memory request failed and nothing was changed.'
+          : describeMemoryAction(command.action);
+        return this.snapshot('ready');
+      }
+    }
 
     // A coding instruction is handled by real tools, not by the language model.
     // This runs before Ollama so a coding request never becomes a hallucinated
@@ -159,15 +199,19 @@ export class ChatService {
         : { passages: [], memories: [], hasKnowledge: false, stalePassages: 0 };
       const reference = referenceBlock(grounding);
       const guidance = groundingInstruction(grounding);
+      // Personal memory is injected separately from researched knowledge so the
+      // model can never present a website passage as something Karl said.
+      const memoryBlock = this.memory ? memoryPromptBlock(this.memory, text) : '';
 
       const systemPrompt = [
         `You are Astra, a local-first desktop companion. Follow this authored personality specification:\n\n${this.personality}`,
         reference === 'NO_REFERENCE_MATERIAL'
           ? 'You have no stored reference material for this question.'
           : `Reference material follows.\n\n${reference}`,
+        memoryBlock,
         guidance,
         'Ordinary conversation cannot take actions or run commands. The separate coding workflow records real tool activity and approvals. Never claim an action occurred unless a recorded tool result confirms it.',
-      ].join('\n\n');
+      ].filter(Boolean).join('\n\n');
 
       const messages = [
         { role: 'system', content: systemPrompt },
@@ -197,7 +241,9 @@ export class ChatService {
       this.history.push({ role: 'user', content: text }, { role: 'assistant', content: answer });
       this.detail = grounding.hasKnowledge
         ? `Answered from ${grounding.passages.length} stored source passage(s).`
-        : 'Local model ready. Nothing in the knowledge base matched, so this reply is not sourced.';
+        : this.memory?.summary().count
+          ? `Local model answered with ${this.memory.summary().count} stored personal memories in context.`
+          : 'Local model ready. Nothing in the knowledge base matched, so this reply is not sourced.';
       return this.snapshot('ready');
     } catch (error) {
       if (controller.signal.aborted && requestGeneration === this.generation) {
@@ -233,5 +279,49 @@ export class ChatService {
     this.codingAbort?.abort();
     this.active?.abort();
     return this.snapshot('ready');
+  }
+}
+
+/**
+ * Render the bounded personal-memory block for the system prompt.
+ *
+ * Personal memory is what Karl told Astra directly. It is labelled as such and
+ * kept separate from retrieved research passages so she can tell the two apart,
+ * and so a website can never appear as a statement Karl made.
+ */
+function memoryPromptBlock(memory: MemoryChatPort, query: string): string {
+  const block = memory.contextFor(query);
+  const lines: string[] = [];
+  if (block.relevant.length > 0) {
+    lines.push(
+      '## Personal memory: things Karl told Astra directly (trusted)',
+      'These are facts Karl stated himself. Use them when they are relevant, and never describe them as something you read online.',
+      ...block.relevant.map((memory2) => `- (${memory2.category.replace('_', ' ')}) ${memory2.statement}`),
+    );
+  }
+  if (block.summary.length > 0) {
+    lines.push(
+      '## Other saved personal context (trusted, may be irrelevant here)',
+      ...block.summary.map((memory2) => `- (${memory2.category.replace('_', ' ')}) ${memory2.statement}`),
+    );
+  }
+  if (lines.length === 0) return 'Karl has not saved any personal memory yet. Never invent a memory about him.';
+  return `${lines.join('\n')}\nIf a question is about Karl personally and nothing here answers it, say you do not remember rather than guessing.`;
+}
+
+function describeMemoryAction(action: MemoryCommandResult['action']): string {
+  switch (action) {
+    case 'remembered':
+      return 'Personal memory saved to the local database.';
+    case 'updated':
+      return 'Personal memory updated; the previous version is marked superseded.';
+    case 'forgot':
+      return 'Personal memory forgotten and excluded from future answers.';
+    case 'conversation_forgotten':
+      return 'Nothing from this conversation will be remembered.';
+    case 'recalled':
+      return 'Answered from stored personal memory.';
+    default:
+      return 'Local model ready.';
   }
 }

@@ -27,6 +27,9 @@ export function App() {
   const [phase, setPhase] = useState<ChatPhase>('connecting');
   const [detail, setDetail] = useState('Checking the local model…');
   const [scrolledUp, setScrolledUp] = useState(false);
+  const [memorySuggestion, setMemorySuggestion] = useState<{ text: string; subject: string } | null>(null);
+  const [memoryCount, setMemoryCount] = useState(0);
+  const [memoryNotice, setMemoryNotice] = useState('');
   const [idleEnabled, setIdleEnabled] = useState(true);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceId>('conversation');
   // Tool activity is shown as a distinct stream, never as a chat message, so a
@@ -53,6 +56,25 @@ export function App() {
     setMessages(status.messages);
     setPhase(status.state);
     setDetail(status.detail);
+    setMemorySuggestion(status.memorySuggestion ?? null);
+    setMemoryCount(status.memoryCount ?? 0);
+  }
+
+  /**
+   * Accepting a suggested memory is an explicit, typed operation. Nothing is
+   * stored until Karl presses this, and a failure is shown rather than hidden.
+   */
+  async function acceptMemorySuggestion(): Promise<void> {
+    if (!memorySuggestion) return;
+    try {
+      const { memory } = await import('./intelligence/client');
+      const result = await memory.remember({ statement: memorySuggestion.text, subject: memorySuggestion.subject });
+      setMemorySuggestion(null);
+      setMemoryNotice(result.ok ? `Saved: ${result.value.statement}` : `Not saved: ${result.error}`);
+      setMemoryCount((count) => (result.ok ? count + 1 : count));
+    } catch (error) {
+      setMemoryNotice(`Not saved: ${error instanceof Error ? error.message : 'memory service unavailable'}`);
+    }
   }
 
   useEffect(() => {
@@ -184,10 +206,19 @@ export function App() {
   // chat and in the Coding workspace from one source.
   useEffect(() => {
     let active = true;
+    let inFlight = false;
+    let lastApplied = 0;
+    let sequence = 0;
     const poll = async () => {
+      // Overlapping polls could land out of order and leave the approval control
+      // showing a previous task, so only the newest response is ever applied.
+      if (inFlight) return;
+      inFlight = true;
+      const request = ++sequence;
       try {
         const snapshot = await window.astraIntelligence.codingSnapshot();
-        if (!active) return;
+        if (!active || request !== lastApplied + 1) return;
+        lastApplied = request;
         setCodingTask(snapshot);
         const notice = `${snapshot.taskId}:${snapshot.phase}:${snapshot.plan?.correctionAttempt ?? 0}`;
         if (snapshot.taskId && notice !== lastCodingNotice.current && (['completed', 'failed'].includes(snapshot.phase) || (snapshot.phase === 'awaiting_approval' && snapshot.plan?.correctionAttempt))) {
@@ -204,6 +235,8 @@ export function App() {
         );
       } catch {
         // The bridge is unavailable before main finishes starting; retry.
+      } finally {
+        inFlight = false;
       }
     };
     void poll();
@@ -270,6 +303,15 @@ export function App() {
             </div>
 
               <div className="conversation-bottom">
+              {memorySuggestion ? (
+                <div className="memory-suggestion" role="group" aria-label="Suggested personal memory">
+                  <strong>Worth remembering?</strong>
+                  <p>{memorySuggestion.text}</p>
+                  <button type="button" onClick={() => void acceptMemorySuggestion()}>Remember this</button>
+                  <button type="button" onClick={() => setMemorySuggestion(null)}>Not now</button>
+                </div>
+              ) : null}
+              {memoryNotice ? <p className="memory-notice" role="status">{memoryNotice}</p> : null}
               {codingTask?.taskId && codingTask.phase === 'awaiting_approval' && !codingTask.requiresConfirmation ? (
                 <div className="coding-chat-control" role="group" aria-label="Coding plan decision" data-task-id={codingTask.taskId}>
                   <strong>Plan awaiting approval for {codingTask.repository}</strong>
@@ -297,7 +339,7 @@ export function App() {
               ) : null}
               <div className="status-line" data-phase={phase}><p role="status">{detail}</p><div className="actions">{phase === 'error' && <button type="button" className="text-button" onClick={() => void refresh()}>Retry connection</button>}{phase === 'generating' && <button type="button" className="text-button" onClick={() => void cancelCurrentRequest()}>Cancel request</button>}<button type="button" className="text-button" onClick={() => void clearConversation()} disabled={messages.length === 0 && !pending}>Clear conversation</button></div></div>
               <form className="composer" onSubmit={(event) => void send(event)}><label htmlFor="message-input" className="sr-only">Message Astra</label><textarea id="message-input" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleKeyDown} placeholder="Message Astra…" rows={2} maxLength={8000} disabled={phase === 'connecting' || phase === 'generating'} /><button type="submit" className="send-button" disabled={!draft.trim() || phase === 'connecting' || phase === 'generating'}>Send <span aria-hidden="true">↗</span></button></form>
-              <div className="conversation-footer"><div className="voice-reserved" aria-label="Future voice controls"><button type="button" disabled aria-label="Microphone unavailable">Mic unavailable</button><button type="button" disabled aria-label="Audio unavailable">Audio unavailable</button></div><span>LOCAL CHAT · MEMORY IS ON DISK</span></div>
+              <div className="conversation-footer"><div className="voice-reserved" aria-label="Future voice controls"><button type="button" disabled aria-label="Microphone unavailable">Mic unavailable</button><button type="button" disabled aria-label="Audio unavailable">Audio unavailable</button></div><span>LOCAL CHAT · {memoryCount} PERSONAL MEMORIES ON DISK</span></div>
             </div>
               </>
             ) : null}

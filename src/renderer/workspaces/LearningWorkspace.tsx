@@ -1,7 +1,23 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { learning, memory, type IntelligenceResult } from '../intelligence/client';
-import type { KnowledgePassageView, KnowledgeSourceView } from '../../shared/intelligence';
-import type { KnowledgeStats, MemoryView } from './types';
+import type {
+  KnowledgePassageView,
+  KnowledgeSourceView,
+  PersonalMemoryRecordView,
+  PersonalMemorySummaryView,
+  PersonalMemoryView,
+} from '../../shared/intelligence';
+import type { KnowledgeStats } from './types';
+
+const MEMORY_CATEGORIES = [
+  'preference',
+  'project_fact',
+  'decision',
+  'correction',
+  'development_note',
+  'successful_approach',
+  'failed_approach',
+] as const;
 
 type Status = { readonly tone: 'ok' | 'error' | 'busy'; readonly text: string } | null;
 
@@ -19,18 +35,31 @@ export function LearningWorkspace({ onLearningActivityChange }: { onLearningActi
   const [passages, setPassages] = useState<KnowledgePassageView[]>([]);
   const [stats, setStats] = useState<string>('');
   const [status, setStatus] = useState<Status>(null);
-  const [memoryList, setMemoryList] = useState<MemoryView[]>([]);
+  const [memoryList, setMemoryList] = useState<PersonalMemoryView[]>([]);
+  const [memorySummary, setMemorySummary] = useState<PersonalMemorySummaryView | null>(null);
+  const [suggestionsEnabled, setSuggestionsEnabled] = useState(true);
+  const [category, setCategory] = useState('preference');
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState('');
   const [statement, setStatement] = useState('');
   const learningBusy = useRef(false);
 
   const refresh = useCallback(async () => {
-    const [s, st, m] = await Promise.all([learning.listSources(), learning.stats(), memory.list()]);
+    const [s, st, m, summary, suggestions] = await Promise.all([
+      learning.listSources(),
+      learning.stats(),
+      memory.listAll(),
+      memory.summary(),
+      memory.suggestions(),
+    ]);
     if (s.ok) setSourceList(s.value as KnowledgeSourceView[]);
     if (st.ok) {
       const value = st.value as KnowledgeStats;
       setStats(`${value.sources} sources · ${value.documents} documents · ${value.chunks} passages`);
     }
-    if (m.ok) setMemoryList(m.value as MemoryView[]);
+    if (m.ok) setMemoryList(m.value as PersonalMemoryRecordView[]);
+    if (summary.ok) setMemorySummary(summary.value);
+    if (suggestions.ok) setSuggestionsEnabled(Boolean(suggestions.value));
   }, []);
 
   useEffect(() => {
@@ -101,7 +130,22 @@ export function LearningWorkspace({ onLearningActivityChange }: { onLearningActi
 
   async function remember(event: FormEvent) {
     event.preventDefault();
-    if (apply(await memory.remember(statement.trim()), 'Saved as a memory Karl asked Astra to keep.')) setStatement('');
+    const saved = apply(
+      await memory.remember({ statement: statement.trim(), category }),
+      'Saved as a memory Karl asked Astra to keep.',
+    );
+    if (saved) setStatement('');
+    await refresh();
+  }
+
+  async function saveEdit(id: number) {
+    apply(await memory.update({ id, statement: editDraft.trim() }), 'Memory updated.');
+    setEditingId(null);
+    await refresh();
+  }
+
+  async function forgetMemory(id: number) {
+    apply(await memory.forget(id), 'Memory forgotten. Astra will not use it again.');
     await refresh();
   }
 
@@ -177,27 +221,73 @@ export function LearningWorkspace({ onLearningActivityChange }: { onLearningActi
         </div>
 
         <div className="workspace-card">
-          <h3>Memory</h3>
+          <h3>Personal memory</h3>
+          <p className="muted">
+            {memorySummary
+              ? `${memorySummary.count} active memor${memorySummary.count === 1 ? 'y' : 'ies'} loaded from the local database at startup (${memorySummary.loadedAt.slice(0, 16).replace('T', ' ')}). Astra uses these in conversation. They are not model training.`
+              : 'Loading personal memory…'}
+          </p>
+          <label className="memory-toggle">
+            <input
+              type="checkbox"
+              checked={suggestionsEnabled}
+              onChange={(event) => {
+                const next = event.target.checked;
+                setSuggestionsEnabled(next);
+                void memory.setSuggestions(next).then(refresh);
+              }}
+            />
+            <span>Suggest memories from conversation (nothing is saved without your confirmation)</span>
+          </label>
           <form onSubmit={remember} className="stack">
             <label>
               <span>Something Astra should remember</span>
               <input value={statement} onChange={(e) => setStatement(e.target.value)} placeholder="Karl prefers concise answers" required />
             </label>
+            <label>
+              <span>Category</span>
+              <select value={category} onChange={(e) => setCategory(e.target.value)}>
+                {MEMORY_CATEGORIES.map((option) => <option key={option} value={option}>{option.replace('_', ' ')}</option>)}
+              </select>
+            </label>
             <button type="submit">Remember</button>
           </form>
           <ul className="source-list">
             {memoryList.map((entry) => (
-              <li key={entry.id}>
+              <li key={entry.id} className={entry.status === 'active' ? '' : 'muted'}>
                 <div>
-                  <strong>{entry.statement}</strong>
-                  <span className="muted">{entry.category}</span>
+                  {editingId === entry.id ? (
+                    <span className="memory-edit">
+                      <input
+                        value={editDraft}
+                        onChange={(event) => setEditDraft(event.target.value)}
+                        aria-label={`Edit memory ${entry.id}`}
+                      />
+                      <button type="button" onClick={() => void saveEdit(entry.id)}>Save</button>
+                      <button type="button" onClick={() => setEditingId(null)}>Cancel</button>
+                    </span>
+                  ) : (
+                    <strong>{entry.statement || '(text cleared)'}</strong>
+                  )}
+                  <span className="muted">
+                    {entry.category.replace('_', ' ')} · {entry.origin.replace(/_/g, ' ')} · saved {entry.createdAt.slice(0, 10)} · updated {entry.updatedAt.slice(0, 10)}
+                  </span>
                 </div>
                 <div className="row-actions">
-                  <button type="button" className="danger" onClick={() => void memory.forget(entry.id).then(refresh)}>Forget</button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingId(entry.id);
+                      setEditDraft(entry.statement);
+                    }}
+                  >
+                    Edit
+                  </button>
+                  <button type="button" className="danger" onClick={() => void forgetMemory(entry.id)}>Forget</button>
                 </div>
               </li>
             ))}
-            {memoryList.length === 0 ? <li className="muted">No memories stored yet. Astra does not keep ordinary conversation.</li> : null}
+            {memoryList.length === 0 ? <li className="muted">No personal memories stored yet. Tell Astra in chat, or add one here.</li> : null}
           </ul>
         </div>
       </div>

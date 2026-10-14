@@ -22,6 +22,7 @@ const review = path.join(root, 'docs', 'review', 'lw03');
 const SOURCE_URL = process.argv[2] ?? 'https://www.typescriptlang.org/docs/handbook/intro.html';
 const SOURCE_KEY = new URL(SOURCE_URL).host + new URL(SOURCE_URL).pathname;
 const SOURCE_PAGES = Number(process.argv[3] ?? 12);
+const CHARACTER = process.argv[5] ?? 'astra-character-v1';
 const SOURCE_DEPTH = Number(process.argv[4] ?? 2);
 mkdirSync(output, { recursive: true });
 mkdirSync(review, { recursive: true });
@@ -92,7 +93,7 @@ function resources(pid) {
 const port = await freePort();
 const env = { ...process.env, ASTRA_CA01_PROFILE: profile };
 delete env.ELECTRON_RUN_AS_NODE;
-const child = spawn(electron, ['.', '--ca01-acceptance', `--remote-debugging-port=${port}`], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
+const child = spawn(electron, ['.', '--ca01-acceptance', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', `--remote-debugging-port=${port}`], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
 let page;
 let browser;
 let target;
@@ -114,17 +115,28 @@ try {
     if (!ready) await delay(200);
   }
   assert(ready, 'The world did not become ready');
+  if (CHARACTER === 'astra-character-v2') {
+    await evaluate(page, "(()=>{const s=document.querySelector('.character-version-select select');s.value='astra-character-v2';s.dispatchEvent(new Event('change',{bubbles:true}));return true})()");
+    for (let attempt = 0; attempt < 80; attempt++) {
+      const loaded = await evaluate(page, "document.querySelector('.character-version-select select')?.value==='astra-character-v2' && document.querySelector('.world-viewport')?.dataset.characterAsset==='ready'");
+      if (loaded) break;
+      await delay(200);
+    }
+  }
+  const characterVersion = await evaluate(page, "document.querySelector('.character-version-select select')?.value ?? 'unknown'");
 
   // Start from a known standing position so the desk journey is observable.
   await evaluate(page, "document.querySelector('[aria-label=\"Bring Astra to the centre of the room\"]')?.click(); true");
   let atCentre = false;
+  let centreSeen = 'not observed';
   const centreDeadline = Date.now() + 30000;
   while (Date.now() < centreDeadline && !atCentre) {
+    centreSeen = JSON.stringify(await presentation(page));
     const current = await presentation(page);
     atCentre = current.waypoint === 'centre' && !['walking', 'turning', 'sitting_down', 'standing_up'].includes(current.state);
     if (!atCentre) await delay(250);
   }
-  assert(atCentre, 'Centre control did not bring her to the middle of the room');
+  assert(atCentre, `Centre control did not bring her to the middle of the room: ${centreSeen}`);
 
   const statsBefore = JSON.parse(await evaluate(page, "window.astraIntelligence.knowledgeStats().then(s=>JSON.stringify(s))"));
   const added = JSON.parse(await evaluate(page, `window.astraIntelligence.addSource({url:'${SOURCE_URL}',maxPages:${SOURCE_PAGES},maxDepth:${SOURCE_DEPTH}}).then(s=>JSON.stringify(s))`));
@@ -153,7 +165,10 @@ try {
     if (current.fps > 0) fpsSamples.push(current.fps);
     sawLearning ||= current.activity === 'learning';
     routed ||= current.activity === 'learning' && (current.destination === 'desk_seat' || current.waypoint === 'desk_seat');
-    if (current.activity === 'learning' && current.waypoint === 'desk_seat' && current.clip === 'desk_work') {
+    // V1 has no `desk_work` clip, so seated work at the keyboard plays `thinking`;
+// V2 plays `desk_work`. Both are real seated work at the desk.
+const SEATED_WORK = ['desk_work', 'thinking', 'seated_idle'];
+if (current.activity === 'learning' && current.waypoint === 'desk_seat' && SEATED_WORK.includes(current.clip)) {
       atDesk = true;
       if (!deskShot) {
         deskShot = true;
@@ -200,7 +215,7 @@ try {
   // Whether she reaches the chair depends on how long the real crawl takes.
   // On this machine it is usually shorter than the walk, so this is reported
   // rather than asserted. See docs/LW_03.md.
-  console.log(`LW-03 learning: entered=${sawLearning} routed=${routed} seatedDeskWork=${atDesk} (crawl took ${learningSeconds ?? 'n/a'}s)`);
+  console.log(`LW-03 learning: entered=${sawLearning} routed=${routed} seatedDeskWork=${atDesk} (crawl took ${learningSeconds ?? 'n/a'}s, character ${characterVersion})`);
   console.log(`Evidence: ${path.join(output, 'learning-native.json')}`);
   await browser.send('Target.closeTarget', { targetId: target.id });
   if (child.exitCode === null) await Promise.race([new Promise((resolve) => child.once('exit', resolve)), delay(10000).then(() => { throw new Error('Electron did not exit'); })]);

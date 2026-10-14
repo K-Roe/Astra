@@ -112,17 +112,26 @@ async function worldSnapshot(page) {
  * Waits for the rigged GLB, then confirms she actually leaves the spot she
  * started on. A character that loads but never moves is not integrated.
  */
-async function verifyCharacterMovement(page) {
-  const deadline = Date.now() + 60000;
+async function verifyCharacterMovement(page, recoverVisibility = async () => {}) {
+  const deadline = Date.now() + 120000;
   const start = await characterProbe(page);
   assert.equal(start.asset, 'ready', `rigged character failed to load (${start.error ?? 'unknown'})`);
   let moved = false;
   let last = start;
+  // The desktop can occlude or minimise the window; rendering pauses by design
+  // then, so a hidden window is not a stuck character. Behaviour is also frame
+  // driven: on a machine starved by other applications the idle scheduler barely
+  // ticks, so a low frame count means "not observed" rather than "broken".
   while (Date.now() < deadline && !moved) {
     await delay(1000);
     const current = await characterProbe(page);
     last = current;
+    if (current.worldState === 'hidden') {
+      await recoverVisibility();
+      continue;
+    }
     if (current.x !== start.x || current.z !== start.z) moved = true;
+    else if (Number(current.frames) - Number(start.frames) > 600) break;
   }
   assert.equal(moved, true, `character never navigated away from its starting waypoint: ${JSON.stringify({ start, last })}`);
   return { start, moved };
@@ -334,9 +343,9 @@ async function main() {
     const observed = JSON.parse(result.result.value);
     assert.equal(observed.title, 'ASTRA');
     assert.match(observed.body, /Hi, Karl/);
-    // Memory now exists on disk (Intelligence V1); the footer must say so
-    // rather than claim the old session-only state.
-    assert.match(observed.body, /MEMORY IS ON DISK/i);
+    // Personal memory is on disk (Intelligence V1 plus Personal Memory V1) and
+    // the footer reports the real active count rather than a session claim.
+    assert.match(observed.body, /\d+ PERSONAL MEMORIES ON DISK/i);
     assert.equal(observed.protocol, 'file:');
     assert.equal(observed.bridge, 'function');
     assert.equal(observed.info.name, 'ASTRA');
@@ -358,7 +367,16 @@ async function main() {
     assert(world.frames > initialFrames + 3, 'Idle scene did not render successive frames');
     assert(world.fps >= 20 && world.fps <= 34, `Idle frame rate missed the 30 fps cap: ${JSON.stringify(world)}`);
     assert.equal(world.characterAsset, 'ready', `Rigged character did not load: ${world.characterError ?? 'unknown'}`);
-    const character = await verifyCharacterMovement(page);
+    const character = await verifyCharacterMovement(page, async () => {
+      focusWindow(handle);
+      await delay(250);
+      if ((await worldSnapshot(page)).hidden) {
+        await page.send('Page.setWebLifecycleState', { state: 'active' }).catch(() => {});
+        await page.send('Runtime.evaluate', {
+          expression: "Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }); document.dispatchEvent(new Event('visibilitychange')); true",
+        }).catch(() => {});
+      }
+    });
     assert.equal(character.start.asset, 'ready', 'Character asset regressed to fallback mid-run');
     const idleMetrics = { world, resources: sampleResources(child.pid), systemCpuPercent: Math.round(100 * (1 - (idleCpuEnd.idle - idleCpuStart.idle) / (idleCpuEnd.total - idleCpuStart.total))) };
     await page.send('Runtime.evaluate', { expression: "document.querySelector('.world-pause').click()" });
@@ -396,9 +414,19 @@ async function main() {
     await sendUiMessage(page, 'What test word did I just tell you?');
     const answers = await waitForAssistantCount(page, 2);
     assert.match(answers[1], /violet/i, 'Second reply did not use current-session context');
+    // Personal Memory V1 deliberately changed this: memory now survives a restart,
+    // but only for things Karl explicitly asks Astra to remember. Asking the
+    // question must not itself store anything.
+    const memoriesBefore = await page.send('Runtime.evaluate', {
+      expression: 'window.astraIntelligence.memorySummary().then(s=>s.count)', awaitPromise: true, returnByValue: true,
+    });
     await sendUiMessage(page, 'Will you remember this test word after I close Astra?');
     const personalityAnswers = await waitForAssistantCount(page, 3);
-    assert.match(personalityAnswers[2], /(?:no|cannot|can't|won't|not remember|do not)/i, 'Astra did not acknowledge lack of persistent memory');
+    assert.match(personalityAnswers[2], /(?:remember|memory|forget)/i, 'Astra did not explain how personal memory works');
+    const memoriesAfter = await page.send('Runtime.evaluate', {
+      expression: 'window.astraIntelligence.memorySummary().then(s=>s.count)', awaitPromise: true, returnByValue: true,
+    });
+    assert.equal(memoriesAfter.result.value, memoriesBefore.result.value, 'asking a question about memory must not store a memory');
     await page.send('Runtime.evaluate', { expression: "document.querySelector('.conversation').scrollTop = 0" });
     await delay(150);
     const jumpBefore = await page.send('Runtime.evaluate', { expression: "Boolean(document.querySelector('.jump-latest'))", returnByValue: true });

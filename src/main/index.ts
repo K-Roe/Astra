@@ -130,6 +130,12 @@ function registerIntelligenceIpc(): void {
   ipcMain.handle(C.memoryCorrect, guard((input: { original: string; corrected: string; reason?: string }) =>
     intelligence.correctMemory(input.original, input.corrected, input.reason)));
   ipcMain.handle(C.memoryForget, guard((id: never) => intelligence.forgetMemory(id)));
+  ipcMain.handle(C.memoryAll, guard(() => intelligence.listAllMemory()));
+  ipcMain.handle(C.memorySummary, guard(() => intelligence.memorySummary()));
+  ipcMain.handle(C.memoryUpdate, guard((input: { id: number; statement?: string; category?: string; subject?: string }) => intelligence.updateMemory(input)));
+  ipcMain.handle(C.memoryForgetText, guard((text: never) => intelligence.forgetMemoryText(text)));
+  ipcMain.handle(C.memorySuggestionsSet, guard((enabled: never) => intelligence.setMemorySuggestions(enabled)));
+  ipcMain.handle(C.memorySuggestionsGet, guard(() => intelligence.memorySuggestionsEnabled()));
   ipcMain.handle(C.memoryCorrections, guard(() => intelligence.listCorrections()));
   ipcMain.handle(C.projectsList, guard(() => intelligence.listProjects()));
   ipcMain.handle(C.projectInspect, guard((root: never) => intelligence.inspectProject(root)));
@@ -173,7 +179,11 @@ void app.whenReady().then(async () => {
   // Chat is grounded in the knowledge base, so the service is created first and
   // its retrieval hook is handed to the conversation layer.
   intelligence = new IntelligenceService({ databasePath: defaultDatabasePath() });
-  chat = new ChatService(personality, fetch, (query: string) => intelligence.groundQuery(query), intelligence.codingBridge);
+  chat = new ChatService(personality, fetch, (query: string) => intelligence.groundQuery(query), intelligence.codingBridge, intelligence.chatMemoryPort());
+  // Personal memory is loaded once at startup so the first reply of a session
+  // already knows what Karl has told Astra, not only later ones.
+  const loadedMemory = intelligence.loadPersonalMemory();
+  console.log(`Astra loaded ${loadedMemory.count} personal memory record(s) from the local database.`);
   // Anything mid-flight at shutdown is recovered for review, never resumed.
   const interrupted = intelligence.recoverInterruptedTasks();
   if (interrupted.length > 0) {

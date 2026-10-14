@@ -55,6 +55,12 @@ export const INTELLIGENCE_CHANNELS = {
   codingConfirm: 'astra:coding-confirm',
   codingEvents: 'astra:coding-events',
   codingDecide: 'astra:coding-decide',
+  memoryAll: 'astra:memory-all',
+  memorySummary: 'astra:memory-summary',
+  memoryUpdate: 'astra:memory-update',
+  memoryForgetText: 'astra:memory-forget-text',
+  memorySuggestionsSet: 'astra:memory-suggestions-set',
+  memorySuggestionsGet: 'astra:memory-suggestions-get',
 } as const;
 
 /** The single permitted workspace root for repository work. */
@@ -81,6 +87,37 @@ export interface KnowledgePassageView {
   readonly stale: boolean;
 }
 
+/** What Karl explicitly told Astra, as shown in the interface. */
+export interface PersonalMemoryView {
+  readonly id: number;
+  readonly subject: string;
+  readonly category: string;
+  readonly statement: string;
+  readonly origin: string;
+  readonly provenance: string;
+  readonly status: string;
+  readonly sensitivity: string;
+  readonly confidence: number;
+  readonly conversationRef: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly forgottenAt: string | null;
+}
+
+/** Same record including ones Karl has already forgotten, for inspection. */
+export interface PersonalMemoryRecordView extends PersonalMemoryView {
+  readonly forgotten: boolean;
+}
+
+/** Startup summary: how many memories were loaded, and how fresh they are. */
+export interface PersonalMemorySummaryView {
+  readonly count: number;
+  readonly revision: number;
+  readonly loadedAt: string;
+  readonly characters: number;
+  readonly truncated: boolean;
+}
+
 export interface ProjectView {
   readonly name: string;
   readonly root: string;
@@ -104,12 +141,19 @@ export interface IntelligenceBridge {
   searchKnowledge(query: string, limit?: number): Promise<KnowledgePassageView[]>;
   knowledgeStats(): Promise<{ sources: number; documents: number; chunks: number; bytes: number }>;
 
-  // Memory
-  listMemory(): Promise<unknown[]>;
-  rememberMemory(input: { statement: string; category?: string }): Promise<unknown>;
-  correctMemory(original: string, corrected: string, reason?: string): Promise<unknown>;
-  forgetMemory(id: number): Promise<void>;
+  // Personal memory. Every call is a validated operation on the local
+  // database; none of them can be reached from website or repository content.
+  listMemory(): Promise<PersonalMemoryView[]>;
+  listAllMemory(): Promise<PersonalMemoryRecordView[]>;
+  memorySummary(): Promise<PersonalMemorySummaryView>;
+  rememberMemory(input: { statement: string; category?: string; subject?: string; conversationRef?: string }): Promise<PersonalMemoryView>;
+  correctMemory(original: string, corrected: string, reason?: string): Promise<PersonalMemoryView>;
+  updateMemory(input: { id: number; statement?: string; category?: string; subject?: string }): Promise<PersonalMemoryView>;
+  forgetMemory(id: number): Promise<PersonalMemoryView>;
+  forgetMemoryText(text: string): Promise<PersonalMemoryView[]>;
   listCorrections(): Promise<unknown[]>;
+  setMemorySuggestions(enabled: boolean): Promise<boolean>;
+  memorySuggestionsEnabled(): Promise<boolean>;
 
   // Projects
   listProjects(): Promise<ProjectView[]>;

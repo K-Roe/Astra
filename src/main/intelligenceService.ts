@@ -3,6 +3,9 @@ import path from 'node:path';
 import { AstraDatabase, openDatabase } from './knowledge/database';
 import { KnowledgeStore } from './knowledge/knowledgeStore';
 import { MemoryStore } from './knowledge/memoryStore';
+import { PersonalMemoryService, type PersonalMemory, type PersonalMemorySummary } from './memory/personalMemory';
+import { MemoryCommands } from './memory/memoryCommands';
+import type { MemoryChatPort } from './chatService';
 import { ApprovalManager } from './approvals/approvalManager';
 import { buildGrounding } from './knowledge/grounding';
 import { TaskStore } from './agent/taskStore';
@@ -42,9 +45,11 @@ export class IntelligenceService implements IntelligenceBridge {
   readonly db: AstraDatabase;
   readonly knowledge: KnowledgeStore;
   readonly memory: MemoryStore;
+  readonly personal: PersonalMemoryService;
   readonly approvals: ApprovalManager;
   readonly tasks: TaskStore;
   readonly sandbox: SandboxOptions;
+  private conversationCounter = 0;
   private codingReliability = PRELIMINARY_CODING_RELIABILITY;
   private benchmarkReport: { model: string; reliability: number; usableForCoding: boolean; note: string } | null = {
     model: CODING_MODEL,
@@ -58,6 +63,7 @@ export class IntelligenceService implements IntelligenceBridge {
     this.db = opened.db;
     this.knowledge = new KnowledgeStore(this.db);
     this.memory = new MemoryStore(this.db);
+    this.personal = new PersonalMemoryService(this.db, this.memory);
     this.approvals = new ApprovalManager(this.db);
     this.tasks = new TaskStore(this.db);
     this.sandbox = { root: options.repositoryRoot ?? REPOSITORY_ROOT };
@@ -163,31 +169,127 @@ export class IntelligenceService implements IntelligenceBridge {
 
   // --------------------------------------------------------------- memory
 
-  async listMemory() {
-    return this.memory.active(200);
+  /**
+   * Startup load. The active personal memories are read once here so the first
+   * reply of a session already knows them, and the count is reported honestly
+   * rather than being re-read on every prompt.
+   */
+  loadPersonalMemory(): PersonalMemorySummary {
+    const summary = this.personal.summary();
+    this.approvals.record({
+      actor: 'system',
+      action: 'memory.loaded',
+      result: 'ok',
+      detail: { count: summary.count, revision: summary.revision },
+    });
+    return summary;
   }
 
-  async rememberMemory(input: { statement: string; category?: string }) {
-    const category = (input.category ?? 'preference') as Parameters<MemoryStore['remember']>[0]['category'];
-    const record = this.memory.remember({ category, statement: input.statement, provenance: 'karl_explicit', origin: 'karl', confidence: 0.9 });
-    this.approvals.record({ actor: 'karl', action: 'memory.remember', target: record.statement.slice(0, 80) });
+  async listMemory(): Promise<PersonalMemory[]> {
+    return this.personal.listActive(200);
+  }
+
+  async listAllMemory(): Promise<(PersonalMemory & { forgotten: boolean })[]> {
+    return this.personal.listAll(200);
+  }
+
+  async memorySummary(): Promise<PersonalMemorySummary> {
+    return this.personal.summary();
+  }
+
+  async rememberMemory(input: { statement: string; category?: string; subject?: string; conversationRef?: string }) {
+    // The renderer may only add memory on Karl's explicit request from the
+    // Personal Memory panel. Nothing here is reachable from web or file content.
+    const record = this.personal.remember({
+      statement: input.statement,
+      category: input.category ?? 'preference',
+      subject: input.subject ?? `preference.${input.statement.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 40)}`,
+      origin: 'ui_edit',
+      conversationRef: input.conversationRef ?? null,
+    });
+    this.approvals.record({ actor: 'karl', action: 'memory.remember', target: record.subject });
     return record;
   }
 
-  async correctMemory(original: string, corrected: string, reason = '') {
-    const record = this.memory.correct(original, corrected, reason);
-    this.approvals.record({ actor: 'karl', action: 'memory.correct', target: corrected.slice(0, 80) });
+  async correctMemory(original: string, corrected: string, reason = ''): Promise<PersonalMemory> {
+    // Supersede the old statement and store the correction as a first-class
+    // personal memory, so the correction history stays auditable.
+    const subject = `preference.${corrected.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 40)}`;
+    const record = this.personal.remember({ statement: corrected, category: 'correction', subject, origin: 'user_correction' });
+    this.db.transaction(() => {
+      this.db.run(
+        `UPDATE memory SET active = 0, status = 'superseded', superseded_reason = ?, updated_at = ?
+         WHERE active = 1 AND statement = ? AND id <> ?`,
+        `corrected to statement ${record.id}`, new Date().toISOString(), original, record.id,
+      );
+      this.db.run(
+        `INSERT INTO corrections(memory_id, original, corrected, reason, created_at) VALUES (?,?,?,?,?)`,
+        null, original, corrected, reason, new Date().toISOString(),
+      );
+    });
+    this.approvals.record({ actor: 'karl', action: 'memory.correct', target: record.subject });
     return record;
   }
 
-  async forgetMemory(id: number): Promise<void> {
-    this.memory.forget(id);
-    this.approvals.record({ actor: 'karl', action: 'memory.forget', target: String(id) });
+  async updateMemory(input: { id: number; statement?: string; category?: string; subject?: string }) {
+    const record = this.personal.update(input.id, input);
+    this.approvals.record({ actor: 'karl', action: 'memory.update', target: record.subject });
+    return record;
+  }
+
+  async forgetMemory(id: number): Promise<PersonalMemory> {
+    const record = this.personal.forget(id);
+    this.approvals.record({ actor: 'karl', action: 'memory.forget', target: record.subject || String(id) });
+    return record;
+  }
+
+  async forgetMemoryText(text: string): Promise<PersonalMemory[]> {
+    const removed = this.personal.forgetByText(text);
+    this.approvals.record({ actor: 'karl', action: 'memory.forget_by_text', detail: { text: text.slice(0, 80), count: removed.length } });
+    return removed;
   }
 
   async listCorrections() {
-    return this.memory.listCorrections();
+    return this.personal.listCorrections();
   }
+
+  async setMemorySuggestions(enabled: boolean): Promise<boolean> {
+    this.personal.setSetting('memory.suggestions', enabled ? 'on' : 'off');
+    this.approvals.record({ actor: 'karl', action: 'memory.suggestions', target: enabled ? 'on' : 'off' });
+    return enabled;
+  }
+
+  async memorySuggestionsEnabled(): Promise<boolean> {
+    return this.personal.suggestionsEnabled();
+  }
+
+  /** The narrow port chat is given. Chat cannot reach the database directly. */
+  chatMemoryPort(): MemoryChatPort {
+    return {
+      handle: (text) => new MemoryCommands(this.personal).handle(text, {
+        conversationRef: this.conversationRef(),
+        suggestionsEnabled: this.personal.suggestionsEnabled(),
+      }),
+      contextFor: (query) => {
+        const block = this.personal.contextBlock(query);
+        return {
+          relevant: block.relevant.map((memory) => ({ category: memory.category, statement: memory.statement })),
+          summary: block.summary.map((memory) => ({ category: memory.category, statement: memory.statement })),
+        };
+      },
+      summary: () => this.personal.summary(),
+      suggestionsEnabled: () => this.personal.suggestionsEnabled(),
+      conversationRef: () => this.conversationRef(),
+    };
+  }
+
+  /** Reference for memories captured in the current conversation. */
+  private conversationRef(): string {
+    if (!this.conversationRefValue) this.conversationRefValue = `conversation-${Date.now().toString(36)}-${++this.conversationCounter}`;
+    return this.conversationRefValue;
+  }
+
+  private conversationRefValue: string | null = null;
 
   // ------------------------------------------------------------- projects
 

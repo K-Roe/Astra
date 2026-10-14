@@ -167,7 +167,7 @@ const port = await freePort();
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
 env.ASTRA_CA01_PROFILE = profile;
-const child = spawn(electron, ['.', '--ca01-acceptance', `--remote-debugging-port=${port}`], {
+const child = spawn(electron, ['.', '--ca01-acceptance', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', `--remote-debugging-port=${port}`], {
   cwd: process.cwd(),
   env,
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -441,7 +441,7 @@ await new Promise((r) => setTimeout(r, 5000));
   browser.close();
 
   const port2 = await freePort();
-  const child2 = spawn(require('electron'), ['.', '--ca01-acceptance', `--remote-debugging-port=${port2}`], { cwd: process.cwd(), env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child2 = spawn(require('electron'), ['.', '--ca01-acceptance', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', `--remote-debugging-port=${port2}`], { cwd: process.cwd(), env, stdio: ['ignore', 'pipe', 'pipe'] });
   let page2;
   let browser2;
   try {

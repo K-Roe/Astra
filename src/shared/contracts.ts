@@ -26,6 +26,13 @@ export interface ChatStatus {
   readonly state: 'ready' | 'error';
   readonly detail: string;
   readonly messages: readonly ChatMessage[];
+  /**
+   * A memory Astra noticed in Karl's own words but has **not** stored. Nothing
+   * is saved until Karl accepts it in the interface.
+   */
+  readonly memorySuggestion?: { readonly text: string; readonly subject: string } | null;
+  /** How many personal memories are currently active. */
+  readonly memoryCount?: number;
 }
 
 export interface AstraBridge {

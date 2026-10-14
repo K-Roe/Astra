@@ -1,5 +1,18 @@
 # Handover for the next AI agent
 
+## Personal Memory V1 handover (2026-10-14) — COMPLETE within verified limits
+
+Read `docs/PERSONAL_MEMORY_V1.md` first. Karl can now say "remember that…", "what do you remember…", "actually, I prefer…" and "forget that…" in ordinary chat, or use the Personal Memory panel in the Learning workspace. Memory is retrieval from the existing intelligence database, **not model training**. `PersonalMemoryService` owns it; `MemoryCommands` executes validated operations; `detectMemoryIntent` is a pure parser; `ChatService` receives a narrow `MemoryChatPort` and can neither reach the database nor run a model as an authority.
+
+**Seams worth knowing before editing anything:**
+- Only text Karl typed in the chat box reaches the memory path. Website passages, repository files and model output cannot create memory, and a test pins that.
+- Statements that look like credentials are refused, not redacted. If you widen what is accepted, re-read ADR-030.
+- `MemoryCommands` runs before the coding tools and before Ollama, and builds its replies from real rows. Do not let a model produce a database command.
+- Retrieval is bounded by `MEMORY_CONTEXT_BUDGET` and every write bumps a revision. Keep both, or a large database can flood the 4k context window and caches can go stale.
+- Forgetting clears the statement text; backups taken earlier can still hold the old value. Say so rather than claiming deletion is absolute.
+
+**Verified:** `npm test` 281/281, lint clean, `node scripts/acceptance-personal-memory.mjs` 32/32 with a real restart-and-recall demonstration, `verify:desktop` pass. Evidence in `test-results/memory/acceptance.json` and `docs/review/lw03/final/memory-*.png`. Honest limits are in the document: keyword retrieval, generated subjects, single-user local storage with no encryption at rest.
+
 ## LW-03 active handover (2026-10-14) — PARTIAL
 
 Start with `docs/LW_03.md` and the actual Git status/diff. CA-01 and Intelligence V1 are preserved from clean checkpoint `c54df9b`; this milestone must not grant them new authority. `HOME_ROOM` and `scene.ts` form the connected four-zone home. `worldActivityFor` maps real CA-01 phases and the approved Learning fetch promise into read-only presentation; `CharacterController` alone navigates the one rig to desk/sofa. `LivingWorldViewport` still owns the capped renderer, pause and fallback. V2 source/GLB are separate from V1, and the UI selector defaults to V1.
