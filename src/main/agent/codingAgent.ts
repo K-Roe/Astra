@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { ApprovalManager, PermissionError } from '../approvals/approvalManager';
 import { TaskStore } from './taskStore';
@@ -26,6 +26,33 @@ import { runApprovedCommand, CommandRejected, type CommandResult } from '../work
 import { MemoryStore } from '../knowledge/memoryStore';
 import { discoverRepositories } from '../workspace/repoTools';
 import type { CodingIntent } from './codingIntent';
+import {
+  buildProjectReadme, type ProjectKind, type ProjectLimits,
+} from './projectBuild';
+import { proposeProjectFiles, proposeProjectRepair } from './codingModel';
+import {
+  authorityExpired, grantProjectAuthority, isRealDirectory,
+  SEPARATE_APPROVAL_EXPLANATIONS, writeAuthorised, type ProjectAuthority,
+} from '../workspace/projectAuthority';
+
+/** What Karl approves when he asks Astra to build a project. */
+export interface ProjectPlan {
+  readonly name: string;
+  /** Absolute destination, proven inside the approved root and absent at plan time. */
+  readonly root: string;
+  readonly kind: ProjectKind;
+  readonly purpose: string;
+  readonly stack: readonly string[];
+  readonly directories: readonly string[];
+  /** Every file Astra intends to create. */
+  readonly manifest: readonly string[];
+  /** The baseline that is always written, so a working project is the floor. */
+  readonly baseline: Readonly<Record<string, string>>;
+  readonly commands: readonly { readonly executable: string; readonly args: readonly string[]; readonly purpose: string }[];
+  readonly limits: ProjectLimits;
+  /** How the project is launched, for the final report. */
+  readonly launchCommand: string;
+}
 
 /**
  * The coding agent orchestrator.
@@ -81,6 +108,14 @@ export interface ProposedPlan {
   readonly investigationNotes: readonly string[];
   readonly patches?: readonly { readonly file: string; readonly hunks: readonly { readonly find: string; readonly replace: string }[] }[];
   readonly newRepository?: { readonly name: string; readonly files: Readonly<Record<string, string>> };
+  /**
+   * A whole-project build approved as one scope.
+   *
+   * Present only when the destination did not exist at plan time. `manifest`
+   * is what Astra intends to create; `scope` is what she is permitted to write,
+   * which is the whole new project directory bounded by a write budget.
+   */
+  readonly project?: ProjectPlan;
   readonly fileOperation?: DirectFilePlan;
   readonly correctionAttempt?: number;
   /** Optional task branch to create once approved, so work is isolated. */
@@ -102,9 +137,37 @@ export interface TaskSnapshot {
   readonly requiresConfirmation: boolean;
   readonly events: readonly ToolEvent[];
   readonly interrupted: boolean;
+  /** What the project build actually produced and verified. */
+  readonly buildReport: ProjectBuildReport | null;
+}
+
+/**
+ * The outcome of a project build, assembled from real results only.
+ *
+ * `validated` is true only when every approved validation command passed. The
+ * launch command is documentation, never a claim that anything is running.
+ */
+export interface ProjectBuildReport {
+  readonly name: string;
+  readonly root: string;
+  readonly files: number;
+  readonly fromModel: number;
+  readonly validated: boolean;
+  readonly commandsRun: number;
+  readonly launchCommand: string;
+  readonly issues: readonly string[];
 }
 
 const MAX_EVENTS = 400;
+
+/**
+ * How long one repair attempt may spend on the local coding model.
+ *
+ * Repair is the expensive, low-certainty step in the build loop. Bounding it
+ * means a model that cannot help costs one short attempt, after which the
+ * verified baseline is restored instead of the build stalling.
+ */
+const REPAIR_BUDGET_MS = 45_000;
 
 export class CodingAgent extends EventEmitter {
   private taskId: number | null = null;
@@ -128,6 +191,10 @@ export class CodingAgent extends EventEmitter {
   private readonly events: ToolEvent[] = [];
   private eventSeq = 0;
   private activeCommand: { abort: () => void; done: Promise<CommandResult> } | null = null;
+  /** Live project-scoped authority. Null outside a project build. */
+  private projectAuthority: ProjectAuthority | null = null;
+  /** What actually happened, for an honest final report. */
+  private buildReport: ProjectBuildReport | null = null;
 
   constructor(
     private readonly sandbox: SandboxOptions,
@@ -192,6 +259,7 @@ export class CodingAgent extends EventEmitter {
     branch?: string | null;
     newRepository?: { name: string; path: string; files: Readonly<Record<string, string>> };
     fileOperation?: DirectFilePlan;
+    project?: ProjectPlan;
   }): Promise<TaskSnapshot> {
     if (this.taskId && ['investigating', 'planning', 'awaiting_approval', 'implementing', 'testing', 'reviewing'].includes(this.phase)) {
       throw new PermissionError('finish, reject or cancel the current task before starting another');
@@ -199,6 +267,7 @@ export class CodingAgent extends EventEmitter {
     this.reset();
     if (input.repository) this.repository = resolveWithinRoot(input.repository, this.sandbox);
     if (input.newRepository) this.repository = null;
+    if (input.project) this.repository = null;
     if (input.fileOperation) this.repository = path.dirname(resolveWithinRootNotRoot(input.fileOperation.target, this.sandbox));
 
     const task = this.tasks.create({
@@ -246,6 +315,7 @@ export class CodingAgent extends EventEmitter {
     branch?: string | null;
     newRepository?: { name: string; path: string; files: Readonly<Record<string, string>> };
     fileOperation?: DirectFilePlan;
+    project?: ProjectPlan;
   }): Promise<ProposedPlan> {
     const notes: string[] = [...(input.notes ?? [])];
     // Normalise so "src/sum.js" and "src\\sum.js" are one entry. Without this a
@@ -291,11 +361,21 @@ export class CodingAgent extends EventEmitter {
       this.emitEvent('file.check', `Checked ${target} for a direct file operation`, true);
     }
 
+    if (input.project) {
+      const root = resolveWithinRootNotRoot(input.project.root, this.sandbox);
+      if (existsSync(root)) throw new Error(`destination already exists: ${root}`);
+      for (const file of input.project.manifest) files.add(normaliseRelative(file));
+      notes.push(`Project scope: every file below ${root}, which does not exist yet. Project authority cannot reach outside it, cannot delete, cannot touch secrets or dependency directories, and is limited to ${input.project.limits.maxWrites} writes, ${input.project.limits.maxCommands} commands and ${Math.round(input.project.limits.deadlineMs / 1000)}s.`);
+      notes.push(`${SEPARATE_APPROVAL_EXPLANATIONS.delete}; ${SEPARATE_APPROVAL_EXPLANATIONS.network}; ${SEPARATE_APPROVAL_EXPLANATIONS.dependency_install}. None of these are covered by this approval.`);
+      this.emitEvent('project.scoped', `Project build scoped to ${root} with a ${input.project.limits.maxWrites}-write budget`, true);
+    }
     const fileList = [...files];
-    const commands = input.proposedCommands ?? [];
+    // A project build declares its validation commands on the project plan, so
+    // they must become the plan's approved command set, not sit beside it.
+    const commands = input.project?.commands ?? input.proposedCommands ?? [];
     return {
       objective: input.objective,
-      repository: this.repository ?? input.newRepository?.path ?? '',
+      repository: this.repository ?? input.newRepository?.path ?? input.project?.root ?? '',
       filesToChange: fileList,
       commands,
       expectedOutcome: input.expectedOutcome ?? `The objective is met and the proposed checks pass, with changes limited to: ${fileList.join(', ') || 'no files'}.`,
@@ -304,6 +384,7 @@ export class CodingAgent extends EventEmitter {
       investigationNotes: notes,
       patches: input.proposedPatches,
       newRepository: input.newRepository ? { name: input.newRepository.name, files: input.newRepository.files } : undefined,
+      project: input.project,
       fileOperation: input.fileOperation,
       branch: input.branch ?? null,
     };
@@ -448,6 +529,226 @@ export class CodingAgent extends EventEmitter {
     }
 
     return this.snapshot();
+  }
+
+  /**
+   * Build an approved project: create it, generate it, verify it, test it and
+   * repair it, within one approval.
+   *
+   * The loop is bounded three ways — iterations, writes and wall-clock — and
+   * every write is verified by reading the bytes back. The deterministic
+   * baseline is written first, so the project is real and working before the
+   * model is allowed to improve it; if model output fails validation it is
+   * repaired once and then reverted to the baseline, and that revert is
+   * reported rather than hidden.
+   */
+  async runProjectBuild(options: { generate: boolean } = { generate: true }): Promise<TaskSnapshot> {
+    this.assertApproved();
+    const plan = this.plan?.project;
+    if (!plan) throw new PermissionError('the approved plan contains no project build');
+    if (this.projectAuthority) throw new PermissionError('this project build is already running');
+    if (!isRealDirectory(path.dirname(plan.root)) && !existsSync(path.dirname(plan.root))) {
+      throw new Error(`the parent directory ${path.dirname(plan.root)} does not exist`);
+    }
+
+    const limits = plan.limits;
+    const authority = grantProjectAuthority(plan.root, this.sandbox, limits.maxWrites, limits.deadlineMs);
+    this.projectAuthority = authority;
+
+    const created: string[] = [];
+    /** Files whose current content came from the coding model. */
+    let modelWritten: string[] = [];
+    const reverted: string[] = [];
+    const issues: string[] = [];
+    let generated = 0;
+    let commandsRun = 0;
+    let validated = false;
+
+    try {
+      this.phase = 'implementing';
+      if (this.taskId) this.tasks.transition(this.taskId, 'implementing');
+      this.emitEvent('build.creating', `Creating ${plan.root} and initialising a local Git repository`, true);
+
+      // 1. The directory and Git metadata. Nothing is overwritten: the grant
+      //    already proved the destination did not exist.
+      mkdirSync(authority.root, { recursive: true });
+      const init: GitResult = await runGit(authority.root, this.sandbox, ['init']);
+      if (!init.ok) throw new Error(`git init failed: ${init.stderr.slice(0, 200)}`);
+      this.emitEvent('build.git', 'Initialised a local Git repository. No remote was created and nothing was committed.', true);
+      this.repository = authority.root;
+
+      // 2. The baseline. Real, dependency-free code, written and verified.
+      this.emitEvent('build.writing', `Writing ${Object.keys(plan.baseline).length} baseline file(s)`, true);
+      for (const [relative, content] of Object.entries(plan.baseline)) {
+        const result = writeAuthorised(authority, relative, content);
+        created.push(relative);
+        this.emitEvent('build.file', `Wrote and verified ${relative} (${result.bytes} bytes)`, true, result.sha256);
+        if (this.taskId) this.tasks.recordChange(this.taskId, { file: relative, action: 'create', applied: 1 });
+      }
+
+      // 3. Let the local coding model improve the application files, inside the
+      //    manifest only. Its output is treated as untrusted until it validates.
+      const writable = plan.manifest.filter((file) => /\.js$/.test(file) && !file.startsWith('test/'));
+      if (options.generate && writable.length > 0) {
+        this.emitEvent('build.generating', `Asking the local coding model for ${writable.length} application file(s)`, true);
+        this.setInvestigatingProposal(true);
+        let produced: Record<string, string> = {};
+        try {
+          produced = await proposeProjectFiles(plan.purpose, writable, fetch);
+        } catch (error) {
+          issues.push(`the coding model did not improve the application files: ${error instanceof Error ? error.message : String(error)}`);
+          this.emitEvent('build.generation_failed', `Kept the generated baseline instead: ${error instanceof Error ? error.message : String(error)}`, false);
+        } finally {
+          this.setInvestigatingProposal(false);
+        }
+        for (const [relative, content] of Object.entries(produced)) {
+          try {
+            const exists = existsSync(path.join(authority.root, relative));
+            const result = writeAuthorised(authority, relative, content);
+            generated += 1;
+            if (!modelWritten.includes(relative)) modelWritten.push(relative);
+            this.emitEvent('build.file', `Wrote and verified ${relative} from the coding model (${result.bytes} bytes)`, true, result.sha256);
+            if (this.taskId) this.tasks.recordChange(this.taskId, { file: relative, action: exists ? 'edit' : 'create', applied: 1 });
+          } catch (error) {
+            issues.push(`rejected generated file ${relative}: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+      }
+
+      // 4. Validate, repair inside the approved scope, and fall back to the
+      //    verified baseline rather than leaving a broken project behind.
+      //
+      //    The first validation pass always runs to completion, even if the
+      //    time budget is spent: a report with no result would be worse than a
+      //    report that says what actually failed. The deadline only bounds
+      //    *extra* passes.
+      for (let iteration = 1; iteration <= limits.maxIterations; iteration += 1) {
+        if (iteration > 1 && authorityExpired(authority)) { issues.push('the build spent its time allowance after the first validation pass'); break; }
+        if (commandsRun >= limits.maxCommands) { issues.push('the build ran out of its command allowance'); break; }
+
+        this.emitEvent('build.validating', `Validation pass ${iteration} of ${limits.maxIterations}`, true);
+        const failures: string[] = [];
+        // Bound to the plan's approved command set, not to the project copy of
+        // it, so the loop can only ever run what Karl approved.
+        for (const command of this.plan!.commands) {
+          commandsRun += 1;
+          const result = await this.runApprovedCommand(command.executable, command.args);
+          if (this.isStopping()) break;
+          const last = result.testResults.at(-1);
+          if (!last?.ok) failures.push(`${command.executable} ${command.args.join(' ')}: ${last?.summary ?? 'no result'}${last?.output ? `\n${last.output.slice(0, 1200)}` : ''}`);
+        }
+        if (this.isStopping()) break;
+
+        if (failures.length === 0) { validated = true; break; }
+
+        // Model-written files are the only thing that can have broken a project
+        // that passed as a baseline, so they are the only thing to undo.
+        if (modelWritten.length > 0) {
+          this.emitEvent('build.fixing', `Validation failed (${failures.length} command(s)). Diagnosing within the approved scope.`, false, failures[0]);
+          const repaired = await this.repairProject(authority, failures[0], modelWritten, issues);
+          if (repaired) continue;
+          // Repair failed: put the verified baseline back and validate again.
+          const restored = this.revertModelWrites(authority, modelWritten, reverted, issues);
+          if (restored) { modelWritten = []; continue; }
+          break;
+        }
+
+        issues.push(`validation failed and the generated baseline could not be repaired: ${failures[0].slice(0, 200)}`);
+        break;
+      }
+
+      // 5. Record what is true on disk and write an honest README.
+      const readme = buildProjectReadme(plan.name, plan.launchCommand, validated, validated ? 'every approved validation command passed' : 'validation did not complete');
+      writeAuthorised(authority, 'README.md', readme);
+
+      const onDisk = created.length + generated;
+      this.buildReport = {
+        name: plan.name,
+        root: plan.root,
+        files: onDisk,
+        fromModel: generated,
+        validated,
+        commandsRun,
+        launchCommand: plan.launchCommand,
+        issues: [...issues, ...reverted.map((file) => `${file} was reverted to the generated baseline after failing validation`)],
+      };
+      this.emitEvent(validated ? 'build.completed' : 'build.incomplete',
+        validated
+          ? `Project created and verified at ${plan.root}`
+          : `Project created at ${plan.root} but validation did not fully pass`,
+        validated);
+      return this.snapshot();
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+      this.emitEvent('build.failed', `Project build failed: ${this.error}`, false);
+      throw error;
+    } finally {
+      this.projectAuthority = null;
+    }
+  }
+
+  /**
+   * One bounded repair pass: ask the model about the file the failure names and
+   * rewrite it. Only a model-written file is worth repairing — the baseline is
+   * already known to pass — so the caller is told which files are eligible.
+   */
+  private async repairProject(authority: ProjectAuthority, failure: string, repairable: readonly string[], issues: string[]): Promise<boolean> {
+    const named = failure.match(/([\w./-]+\.js)/)?.[1];
+    const candidates = repairable.filter((file) => /\.js$/.test(file) && (!named || file.includes(named)));
+    for (const relative of candidates.slice(0, 1)) {
+      const absolute = path.join(authority.root, relative);
+      if (!existsSync(absolute)) continue;
+      try {
+        const current = readFileSync(absolute, 'utf8');
+        // Repair is the expensive, low-certainty step, so it gets a short,
+        // explicit budget. When it runs out the verified baseline is restored
+        // rather than the build stalling on a model that may not help.
+        const repaired = await proposeProjectRepair(absolute, current, failure, fetch, AbortSignal.timeout(REPAIR_BUDGET_MS));
+        writeAuthorised(authority, relative, repaired);
+        this.emitEvent('build.repaired', `Repaired ${relative} from the reported failure`, true);
+        if (this.taskId) this.tasks.recordChange(this.taskId, { file: relative, action: 'edit', applied: 1 });
+        return true;
+      } catch (error) {
+        issues.push(`could not repair ${relative}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    issues.push('the coding model could not repair the failure within the approved scope');
+    return false;
+  }
+
+  /**
+   * Put model-written files back to the verified baseline.
+   *
+   * This is the floor that makes the build trustworthy: the baseline is known
+   * to pass, so a project that fails only because of model output ends up
+   * working, with the reverts reported rather than hidden.
+   */
+  private revertModelWrites(authority: ProjectAuthority, modelWritten: readonly string[], reverted: string[], issues: string[]): boolean {
+    const plan = this.plan!.project!;
+    let restored = 0;
+    for (const relative of modelWritten) {
+      const content = plan.baseline[relative];
+      if (content === undefined) continue;
+      const absolute = path.join(authority.root, relative);
+      if (!existsSync(absolute)) continue;
+      let current: string;
+      try { current = readFileSync(absolute, 'utf8'); } catch { continue; }
+      if (current === content) continue;
+      try {
+        writeAuthorised(authority, relative, content);
+        reverted.push(relative);
+        restored += 1;
+        this.emitEvent('build.reverted', `Reverted ${relative} to the verified baseline`, true);
+      } catch { /* The budget may be spent; the report says so. */ }
+    }
+    if (restored === 0) return false;
+    issues.push(`${restored} coding-model file(s) were reverted to the verified baseline`);
+    return true;
+  }
+
+  /** The operations project authority can never grant, for honest reporting. */
+  static separateApprovalReasons(): Record<string, string> {
+    return { ...SEPARATE_APPROVAL_EXPLANATIONS };
   }
 
   /** Create a new repository from an approved plan. Never overwrites. */
@@ -826,6 +1127,7 @@ export class CodingAgent extends EventEmitter {
       requiresConfirmation: this.interrupted,
       events: this.events.slice(-120),
       interrupted: this.interrupted,
+      buildReport: this.buildReport,
     };
   }
 
@@ -846,7 +1148,10 @@ export class CodingAgent extends EventEmitter {
   private assertApproved(): void {
     if (!this.plan) throw new Error('there is no plan');
     if (this.taskId !== null && this.revokedTasks.has(this.taskId)) throw new PermissionError('this task was cancelled or rejected; it can never be approved or executed');
-    if ((!this.repository && !this.plan.newRepository) || (this.repository && this.repository.toLowerCase() !== this.plan.repository.toLowerCase())) {
+    // A project build has no repository until Astra creates it, so the project
+    // root plays the same role `newRepository` does for a scaffold.
+    if (!this.repository && !this.plan.newRepository && !this.plan.project) throw new PermissionError('no destination is selected for this plan');
+    if ((this.repository || this.plan.newRepository || this.plan.project) && this.repository && !this.plan.newRepository && !this.plan.project && this.repository.toLowerCase() !== this.plan.repository.toLowerCase()) {
       throw new PermissionError('selected repository differs from the approved plan');
     }
     if (this.approvedFingerprint === null) throw new PermissionError('the plan has not been approved');
@@ -901,6 +1206,7 @@ export function scopeFingerprint(plan: ProposedPlan): string {
     branch: plan.branch ?? null,
     patches: plan.patches ?? null,
     newRepository: plan.newRepository ?? null,
+    project: plan.project ?? null,
     fileOperation: plan.fileOperation ?? null,
   });
 }

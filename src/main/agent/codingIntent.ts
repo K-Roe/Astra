@@ -326,6 +326,15 @@ export function sanitiseSearchTerm(raw: string): string | null {
 }
 
 /**
+ * Words that end the spoken name, because a new clause has started.
+ *
+ * Without these the capture runs to the end of the sentence, so "called
+ * Astra's Blog and build me a website" proposes a project called
+ * `AstrasBlogAndBuildMeAWebsite` — a different project from the one Karl named.
+ */
+const NAME_CLAUSE_END = 'inside|within|under|into|onto|with|using|that|which|and|then|plus|also|so|because|but|where|when|for|in|at|on|via|from';
+
+/**
  * Name a new repository or directory should be created under, if one is stated.
  *
  * The capture runs to a clause boundary rather than stopping at the first
@@ -334,7 +343,7 @@ export function sanitiseSearchTerm(raw: string): string | null {
  * propose a different project than the one he named.
  */
 export function extractNewRepositoryName(text: string): string | null {
-  const match = /\b(?:called|named)\s+([^"`\n]{2,60}?)(?=\s+(?:inside|under|in|within|with|using|that|which|stored|inside of)\b|[?.!]|$)/i.exec(text);
+  const match = new RegExp(String.raw`\b(?:called|named)\s+([^"\`\n]{2,48}?)(?=\s+(?:${NAME_CLAUSE_END})\b|[?.!]|$)`, 'i').exec(text);
   if (!match) return null;
   const candidate = match[1].replace(/^["'`]+|["'`]+$/g, '').trim();
   return candidate.length >= 2 ? candidate : null;

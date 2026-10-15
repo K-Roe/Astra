@@ -73,6 +73,11 @@ export class ChatService {
   ) {
     this.coding?.onActivity((event, snapshot) => {
       if (event.kind === 'task.completed') {
+        const project = snapshot.buildReport;
+        if (project) {
+          this.history.push({ role: 'assistant', content: describeProjectBuild(project) });
+          return;
+        }
         if (snapshot.plan?.fileOperation) {
           const operation = snapshot.plan.fileOperation;
           const done = describeVerifiedFileOperation(operation);
@@ -363,6 +368,44 @@ function memoryPromptBlock(memory: MemoryChatPort, query: string): string {
   }
   if (lines.length === 0) return 'Karl has not saved any personal memory yet. Never invent a memory about him.';
   return `${lines.join('\n')}\nIf a question is about Karl personally and nothing here answers it, say you do not remember rather than guessing.`;
+}
+
+/**
+ * Report a finished project build from what was actually observed.
+ *
+ * Every line here is a value the build measured: the path it wrote to, the
+ * file count it verified by reading back, whether validation actually passed,
+ * and the issues it could not resolve. The launch command is documentation —
+ * Astra never starts a server, so it never says the site is running.
+ */
+function describeProjectBuild(report: {
+  name: string;
+  root: string;
+  files: number;
+  fromModel: number;
+  validated: boolean;
+  commandsRun: number;
+  launchCommand: string;
+  issues: readonly string[];
+}): string {
+  const lines = [
+    `**${report.name} is built and verified on disk.**`,
+    '',
+    `- Location: \`${report.root}\``,
+    `- Files written and read back: ${report.files}`,
+    `- Of those, produced by the local coding model: ${report.fromModel}`,
+    `- Validation commands run: ${report.commandsRun}, all passed: ${report.validated ? 'yes' : 'no'}`,
+    report.validated
+      ? '- Dependencies: none. The project runs on the Node.js already installed.'
+      : '- Dependencies: none.',
+    report.issues.length ? '' : null,
+    ...(report.issues.length ? ['**Remaining issues:**', ...report.issues.map((issue) => `- ${issue}`)] : []),
+    '',
+    `**Launch it yourself:** \`${report.launchCommand}\` from \`${report.root}\`, then open http://localhost:3000.`,
+    'Astra did not start a server and has not checked that anything is listening on that port; it can do so if you ask.',
+    'The Git repository was initialised locally. No remote was created and nothing was committed.',
+  ].filter((line) => line !== null);
+  return lines.join('\n');
 }
 
 /**

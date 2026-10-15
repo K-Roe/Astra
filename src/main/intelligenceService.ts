@@ -461,6 +461,7 @@ export class IntelligenceService implements IntelligenceBridge {
       changes: s.changes,
       testResults: s.testResults,
       diff: s.diff,
+      buildReport: s.buildReport,
       workingTree: s.workingTree
         ? {
             branch: s.workingTree.branch,
@@ -577,6 +578,8 @@ export class IntelligenceService implements IntelligenceBridge {
     const alreadyPresent = await agent.implementationAlreadyPresent();
     if (alreadyPresent) {
       // The exact prior edit/scaffold is on disk; tests still need fresh approval.
+    } else if (plan.project) {
+      await agent.runProjectBuild();
     } else if (plan.newRepository) {
       await agent.createRepository(plan.newRepository);
     } else if (plan.fileOperation) {
@@ -588,6 +591,10 @@ export class IntelligenceService implements IntelligenceBridge {
       throw new Error('approved plan contains no bounded work');
     }
     if (agent.isStopping()) return;
+    // A project build runs its own validation and repair loop inside
+    // runProjectBuild, bounded by the plan's limits. Re-running the commands
+    // here would double-count the budget and bypass the repair pass.
+    if (plan.project) return;
     for (const command of plan.commands) {
       const result = await agent.runApprovedCommand(command.executable, command.args);
       if (agent.isStopping()) return;

@@ -13,6 +13,8 @@ import { type SandboxOptions } from '../workspace/pathGuard';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { proposeCodingPatch, proposeFileContent, type ModelProposal } from './codingModel';
+import { analyseProjectRequest, buildProjectScaffold } from './projectBuild';
+import { SEPARATE_APPROVAL_EXPLANATIONS } from '../workspace/projectAuthority';
 import { gitStatus } from '../workspace/fileTools';
 import { inspectLocalService, inspectPath } from '../workspace/verification';
 import { planDirectFileAction, readDirectFile, type DirectFileAction } from '../workspace/fileTools';
@@ -495,6 +497,9 @@ export class CodingBridge {
     const name = normalised;
     const renamed = normalised !== rawName ? `- Name as spoken: **${rawName}**, folded to **${normalised}** so it is a single safe directory name` : null;
     const target = path.join(this.sandbox.root, name);
+    const request = analyseProjectRequest(message, name);
+    if (request.buildsApplication) return this.proposeProjectBuild(message, name, target, request);
+
     const stack = extractStackHints(message);
     const scaffold = buildScaffold(name, stack);
     // Astra can create files and local Git metadata. It has no tool that
@@ -535,6 +540,90 @@ export class CodingBridge {
       expectedOutcome: `${name} exists at ${target} with local Git metadata and the listed scaffold files.`,
       risks: ['Dependencies are declared but not installed. Install and build remain unverified until separately approved.'],
     });
+    return { reply: lines.join('\n'), handled: true, snapshot };
+  }
+
+  /**
+ * Propose a whole working project under one approval.
+ *
+ * The plan is the contract Karl sees: the absolute destination, what the
+ * project is for, the stack preference, every file Astra intends to create, the
+ * commands she intends to run, and the exact limits of what the approval
+ * permits. Nothing is created before he approves it.
+ */
+  private async proposeProjectBuild(message: string, name: string, target: string, request: ReturnType<typeof analyseProjectRequest>): Promise<ChatToolResult> {
+    if (['investigating', 'planning', 'awaiting_approval', 'implementing', 'testing', 'reviewing'].includes(this.agent.snapshot().phase)) {
+      return { reply: 'A coding task is already in progress. Finish, reject or cancel it before starting another.', handled: true };
+    }
+    if (existsSync(target)) {
+      return { reply: `**Destination is not available.**\n\n\`${target}\` already exists, so Astra will not create or overwrite it. Choose a different name.`, handled: true };
+    }
+
+    const baseline = buildProjectScaffold(name, request.kind);
+    const manifest = Object.keys(baseline);
+    const directories = [...new Set(manifest.map((file) => file.slice(0, Math.max(0, file.lastIndexOf('/')))).filter(Boolean))];
+    // Validation is real: a syntax check per source file, then the test suite.
+    const sourceFiles = manifest.filter((file) => /\.js$/.test(file) && !file.startsWith('test/')).slice(0, 8);
+    const commands = [
+      ...sourceFiles.map((file) => ({ executable: 'node', args: ['--check', file], purpose: `Check ${file} parses` })),
+      { executable: 'node', args: ['--test'], purpose: 'Run the project test suite' },
+    ].slice(0, request.limits.maxCommands);
+
+    const launchCommand = request.kind === 'blog' ? 'node src/server.js' : 'node src/index.js';
+
+    const lines = [
+      `**Proposed project build**`,
+      '',
+      `- Absolute destination: \`${target}\``,
+      `- Purpose: ${request.purpose}`,
+      `- Kind: ${request.kind}`,
+      `- Stack preference: ${request.stack.length ? request.stack.join(', ') : 'plain Node.js, no dependencies'}`,
+      `- Directories to create: ${directories.length ? directories.join(', ') : 'the project root only'}`,
+      `- Files to create (${manifest.length}): ${manifest.join(', ')}`,
+      `- Commands to run (${commands.length}): ${commands.map((c) => `${c.executable} ${c.args.join(' ')}`).join('; ')}`,
+      '',
+      '**What this approval permits**',
+      `- Writing any file under \`${target}\` only, up to ${request.limits.maxWrites} writes.`,
+      `- Running only the ${commands.length} command(s) listed above, up to ${request.limits.maxCommands} runs and ${Math.round(request.limits.deadlineMs / 1000)} seconds.`,
+      '- The local coding model may draft application files inside the manifest; its output is validated and rejected if it fails.',
+      '',
+      '**What still needs separate approval**',
+      `- ${SEPARATE_APPROVAL_EXPLANATIONS.delete}`,
+      `- ${SEPARATE_APPROVAL_EXPLANATIONS.dependency_install}`,
+      '- Network access, credentials, and anything outside this directory.',
+      '',
+      `**After approval Astra will** create the directory, initialise a local Git repository with no remote and no commit, write and verify every file, run the validation commands, and repair failures within this scope up to ${request.limits.maxIterations} pass(es).`,
+      '',
+      `**Launch it yourself with** \`${launchCommand}\` — Astra does not start servers.`,
+      '',
+      'Nothing has been created yet. Approve this plan in Coding, or tell Astra to cancel.',
+    ];
+
+    const snapshot = await this.agent.beginTask({
+      objective: message.trim(),
+      project: {
+        name,
+        root: target,
+        kind: request.kind,
+        purpose: request.purpose,
+        stack: request.stack,
+        directories,
+        manifest,
+        baseline,
+        commands,
+        limits: request.limits,
+        launchCommand,
+      },
+      proposedFiles: manifest,
+      expectedOutcome: `${target} exists with a local Git repository and the listed files, and every listed validation command passes.`,
+      rootCause: 'Karl asked for a project to be built from one request.',
+      risks: [
+        'Dependencies are not installed; this project is written to run on the installed Node.js without any.',
+        'A Git repository is initialised locally with no remote and nothing is committed.',
+        `The build is bounded to ${request.limits.maxIterations} validation pass(es), ${request.limits.maxWrites} writes and ${Math.round(request.limits.deadlineMs / 1000)}s.`,
+      ],
+    });
+
     return { reply: lines.join('\n'), handled: true, snapshot };
   }
 

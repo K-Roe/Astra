@@ -242,6 +242,23 @@ readonly fileOperation?: {
     };
     readonly correctionAttempt?: number;
     readonly branch?: string | null;
+    /**
+     * A whole-project build. `manifest` is what Astra intends to create; the
+     * limits are the ceiling the approval grants. Present only when the
+     * destination did not exist when the plan was made.
+     */
+    readonly project?: {
+      readonly name: string;
+      readonly root: string;
+      readonly kind: string;
+      readonly purpose: string;
+      readonly stack: readonly string[];
+      readonly directories: readonly string[];
+      readonly manifest: readonly string[];
+      readonly baseline: Readonly<Record<string, string>>;
+      readonly limits: { readonly maxIterations: number; readonly maxWrites: number; readonly maxCommands: number; readonly deadlineMs: number };
+      readonly launchCommand: string;
+    };
   } | null;
   readonly approval: { requested: boolean; approved: boolean };
   readonly changes: readonly { file: string; action: string; applied: number }[];
@@ -251,4 +268,15 @@ readonly fileOperation?: {
   readonly error: string | null;
   readonly requiresConfirmation: boolean;
   readonly events: readonly { id: number; at: string; kind: string; label: string; ok: boolean; detail?: string }[];
+  /** What a project build really produced, for an honest completion report. */
+  readonly buildReport: {
+    readonly name: string;
+    readonly root: string;
+    readonly files: number;
+    readonly fromModel: number;
+    readonly validated: boolean;
+    readonly commandsRun: number;
+    readonly launchCommand: string;
+    readonly issues: readonly string[];
+  } | null;
 }

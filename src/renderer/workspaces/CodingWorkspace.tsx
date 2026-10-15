@@ -187,6 +187,22 @@ export function CodingWorkspace({
               {plan.patches?.length ? <details><summary>Proposed patch</summary><pre className="diff-view">{plan.patches.map((patch) => `${patch.file}\n${patch.hunks.map((h) => `- ${h.find}\n+ ${h.replace}`).join('\n')}`).join('\n\n')}</pre></details> : null}
               {plan.newRepository ? <details><summary>Scaffold files</summary><pre className="diff-view">{Object.entries(plan.newRepository.files).map(([file, content]) => `${file}\n${content}`).join('\n\n')}</pre></details> : null}
               {plan.fileOperation ? <details open><summary>Direct file {plan.fileOperation.action}: {plan.fileOperation.target}</summary><pre className="diff-view">{plan.fileOperation.action === 'delete' ? 'Delete this file after approval.' : plan.fileOperation.content}</pre><p>Parent directory: {plan.fileOperation.createParent ? 'will be created after approval' : 'already exists'}. The result will be read from disk before completion is reported.</p></details> : null}
+              {plan.project ? (
+              <div className="workspace-card">
+                <h3>Project build scope</h3>
+                <dl className="detail-list">
+                  <dt>Destination</dt><dd>{plan.project.root}</dd>
+                  <dt>Purpose</dt><dd>{plan.project.purpose}</dd>
+                  <dt>Kind</dt><dd>{plan.project.kind}</dd>
+                  <dt>Stack preference</dt><dd>{plan.project.stack.join(', ') || 'plain Node.js, no dependencies'}</dd>
+                  <dt>Directories</dt><dd>{plan.project.directories.join(', ') || 'project root only'}</dd>
+                  <dt>Permitted writes</dt><dd>any file under {plan.project.root}, up to {plan.project.limits.maxWrites} writes</dd>
+                  <dt>Permitted commands</dt><dd>{plan.commands.map((c) => `${c.executable} ${c.args.join(' ')}`).join(', ')} (max {plan.project.limits.maxCommands} runs, {Math.round(plan.project.limits.deadlineMs / 1000)}s)</dd>
+                  <dt>Needs separate approval</dt><dd>deletion, dependency installation, network access, credentials, anything outside this directory</dd>
+                </dl>
+                <details><summary>Files Astra will create ({plan.project.manifest.length})</summary><pre className="diff-view">{Object.entries(plan.project.baseline).map(([file, content]) => `${file}\n${content}`).join('\n\n')}</pre></details>
+              </div>
+            ) : null}
               {pendingApproval ? (
                 <div className="row-actions">
                   <button type="button" onClick={() => void decide('approve')}>Approve plan</button>
@@ -201,6 +217,18 @@ export function CodingWorkspace({
 
         <div className="workspace-card">
           <h3>Changes and tests</h3>
+          {task?.buildReport ? (
+            <div className="detail-list">
+              <dl>
+                <dt>Project</dt><dd>{task.buildReport.name}</dd>
+                <dt>Location</dt><dd>{task.buildReport.root}</dd>
+                <dt>Files verified on disk</dt><dd>{task.buildReport.files} ({task.buildReport.fromModel} from the coding model)</dd>
+                <dt>Validation</dt><dd>{task.buildReport.validated ? `passed — ${task.buildReport.commandsRun} command(s)` : 'did not fully pass'}</dd>
+                <dt>Launch it yourself</dt><dd>{task.buildReport.launchCommand}</dd>
+              </dl>
+              {task.buildReport.issues.length ? <ul className="source-list">{task.buildReport.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul> : null}
+            </div>
+          ) : null}
           {task && task.changes.length > 0 ? (
             <ul className="source-list">
               {task.changes.map((change, index) => (

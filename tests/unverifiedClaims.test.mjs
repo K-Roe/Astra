@@ -278,11 +278,13 @@ test('a proposed project never claims a running website', async () => {
     const result = await bridge.handle('Create a new blog website called BlogTarget at http://localhost:3000');
     assert.ok(result);
     // Nothing exists until Karl approves, and Astra says so.
-    assert.match(result.reply, /Review the Coding workspace proposal and approve/i);
+    assert.match(result.reply, /Nothing has been created yet/i);
     assert.doesNotMatch(result.reply, /is (?:now )?(?:running|available|live)/i);
     // And it states the limitation rather than implying a server was started.
-    assert.match(result.reply, /cannot start a web server/i);
+    assert.match(result.reply, /Astra does not start servers/i);
+    assert.match(result.reply, /launch it yourself/i);
     assert.equal(existsSync(path.join(root, 'BlogTarget')), false, 'proposal must not create anything');
+    assert.equal(existsSync(path.join(root, 'BlogTargetAtHttpLocalhost3000')), false);
   } finally { cleanup(); }
 });
 
