@@ -1,5 +1,14 @@
 ﻿# Project ASTRA checklist
 
+## LW-03 UI and world correction — validated locally, LW-03 still PARTIAL (2026-10-15)
+
+- [x] Conversation history and persistent personal memory labelled separately; availability and active count come from a successful memory-service summary read. Native real-profile desktop check found 3 existing records visible in Learning, matching Chat; memory-persistence questions now receive deterministic answers without writes.
+- [x] Chair back and side approach face the desk/monitor; seat facing and `desk_work` align. Focused layout/controller tests pass; real 18.58-second Learning crawl reached V2 `desk_work` and front, side and overhead native captures were inspected.
+- [x] V1 remains the fresh-profile default, V2 is clearly labelled as preview pending Karl's visual review, and an explicit V2 selection survives an Electron restart. Native CA-01 verified the selector is disabled during active work; V1 stays selectable.
+- [x] Default camera shows Astra, desk, sofa and walking area; Follow, close, full home and desk inspection views remain in the one capped renderer. Native default/Follow/close captures inspected; idle acceptance averaged 29.7 FPS and Learning averaged 29.1 FPS.
+- [x] Chat, Learning and Coding regressions: `npm run lint` clean; `npm test` 286/286 including build; `acceptance-personal-memory` 32/32; `acceptance-ca01` 82/82; LW-03 idle and real Learning runs passed; flagged real-profile desktop verifier passed with clean Electron exit. Evidence in `test-results/` (ignored user data) and `docs/review/lw03/*-correction-native.png`.
+- [ ] Karl's visual approval of V2 and exhaustive animation-frame clipping review remain open. One 210-second random idle run did not choose an autonomous stand; Centre-triggered stand passed. A generated reply to unusual quoted hostile input can still misstate a save even though no memory is written.
+
 ## PERSONAL MEMORY V1 - COMPLETE within verified limits (2026-10-14)
 
 - [x] Existing SQLite intelligence database extended, not duplicated: migration 3 adds `subject`, `status`, `origin`, `sensitivity`, `conversation_ref`, `forgotten_at`, `superseded_reason` to `memory` and creates `memory_events` and `settings`. Check: `tests/personalMemory.test.mjs` migrates a database written by the earlier build and its legacy rows become usable.

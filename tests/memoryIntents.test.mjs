@@ -21,6 +21,14 @@ test('recall questions are detected with their topic', () => {
   assert.equal(detectMemoryIntent('do you remember my cat?')?.kind, 'recall');
 });
 
+test('questions about Astra memory persistence never become save requests', () => {
+  assert.equal(detectMemoryIntent('Will you remember this test word after I close Astra?')?.kind, 'explain_persistence');
+  assert.equal(detectMemoryIntent('How does your memory work?')?.kind, 'explain_persistence');
+  assert.equal(detectMemoryIntent('Will you remember this?')?.kind, 'explain_persistence');
+  assert.equal(detectMemoryIntent('Can you remember this after I restart Astra?')?.kind, 'explain_persistence');
+  assert.equal(detectMemoryIntent('Can you remember my cat?'), null);
+});
+
 test('updates and corrections are distinguished from new memories', () => {
   const updated = detectMemoryIntent('update my frontend stack to React with plain JavaScript');
   assert.equal(updated.kind, 'update');

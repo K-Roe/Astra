@@ -9,7 +9,7 @@
  * executes whatever is returned here.
  */
 
-export type MemoryIntentKind = 'remember' | 'recall' | 'update' | 'forget' | 'forget_conversation';
+export type MemoryIntentKind = 'remember' | 'recall' | 'update' | 'forget' | 'forget_conversation' | 'explain_persistence';
 
 export interface MemoryIntent {
   readonly kind: MemoryIntentKind;
@@ -61,6 +61,14 @@ const LEAD = /^\s*(?:(?:hey|hi|ok|okay|please|astra)\b[,:]?\s*)+/i;
 export function detectMemoryIntent(raw: string): MemoryIntent | null {
   const text = raw.replace(LEAD, '').trim();
   if (!text || raw.length > 2000) return null;
+
+  // Questions about Astra's own persistence must be answered from the real
+  // service, never from an unrelated retrieved website or a generated claim.
+  if (/^(?:will|would)\s+you\s+remember\b/i.test(text)
+    || (/^(?:can|could)\s+you\s+remember\b/i.test(text) && /\b(?:after|across|when)\b.*\b(?:close|restart|reopen|quit|exit|session)\b/i.test(text))
+    || /^how\s+(?:does|do|is)\s+(?:your|personal)\s+memory\b/i.test(text)) {
+    return { kind: 'explain_persistence', text };
+  }
 
   if (NO_MEMORY.test(text) || NO_MEMORY_SHORT.test(text)) {
     return { kind: 'forget_conversation', text };

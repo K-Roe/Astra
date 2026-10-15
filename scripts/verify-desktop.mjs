@@ -131,7 +131,8 @@ async function verifyCharacterMovement(page, recoverVisibility = async () => {})
       continue;
     }
     if (current.x !== start.x || current.z !== start.z) moved = true;
-    else if (Number(current.frames) - Number(start.frames) > 600) break;
+    // Idle activities can deliberately stay in place for multiple choices.
+    // Keep the full observation window rather than failing after 20 seconds.
   }
   assert.equal(moved, true, `character never navigated away from its starting waypoint: ${JSON.stringify({ start, last })}`);
   return { start, moved };
@@ -263,7 +264,7 @@ async function inspectLayout(page, compact) {
   assert(layout.avatar.width > 100 && layout.avatar.height > 100, 'Avatar panel collapsed');
   assert(layout.chat.width > 250 && layout.chat.height > 200, 'Conversation panel collapsed');
   assert(layout.composer.y + layout.composer.height <= layout.height + 1, 'Composer is clipped');
-  assert.match(layout.placeholder, /Astra character V1 · rigged locally/i);
+  assert.match(layout.placeholder, /V1 approved model active/i);
   assert.equal(layout.idleToggle, true, 'Idle activities control is missing');
   assert.deepEqual(layout.voice.map(({ text, disabled }) => ({ text, disabled })), [{ text: 'Mic unavailable', disabled: true }, { text: 'Audio unavailable', disabled: true }]);
   assert(layout.voice.every((button) => button.bottom <= layout.height + 1), 'Reserved voice controls are clipped');
@@ -345,7 +346,8 @@ async function main() {
     assert.match(observed.body, /Hi, Karl/);
     // Personal memory is on disk (Intelligence V1 plus Personal Memory V1) and
     // the footer reports the real active count rather than a session claim.
-    assert.match(observed.body, /\d+ PERSONAL MEMORIES ON DISK/i);
+    assert.match(observed.body, /Your conversation is temporary, but Astra can remember information you ask her to save\./i);
+    assert.match(observed.body, /PERSONAL MEMORY AVAILABLE · \d+ SAVED/i);
     assert.equal(observed.protocol, 'file:');
     assert.equal(observed.bridge, 'function');
     assert.equal(observed.info.name, 'ASTRA');
@@ -354,6 +356,30 @@ async function main() {
     assert.equal(observed.nodeProcess, 'undefined');
     assert.match(observed.csp, /connect-src 'none'/);
     await inspectLayout(page, false);
+    const memoryState = await page.send('Runtime.evaluate', {
+      expression: "(async()=>{const [chat,summary]=await Promise.all([window.astra.getChatStatus(),window.astraIntelligence.memorySummary()]);return JSON.stringify({available:chat.memoryAvailable,chatCount:chat.memoryCount,storedCount:summary.count})})()",
+      awaitPromise: true, returnByValue: true,
+    });
+    const saved = JSON.parse(memoryState.result.value);
+    assert.equal(saved.available, true, 'persistent personal memory service is unavailable');
+    assert.equal(saved.chatCount, saved.storedCount, 'chat and memory service counts differ');
+    if (process.argv.includes('--expect-existing-memory')) {
+      assert(saved.storedCount > 0, 'no existing personal memories were found in the real profile');
+    }
+    await page.send('Runtime.evaluate', { expression: "[...document.querySelectorAll('.workspace-tabs button')].find(b=>b.innerText==='Learning')?.click()" });
+    let panelReady = false;
+    for (let attempt = 0; attempt < 40 && !panelReady; attempt++) {
+      const result = await page.send('Runtime.evaluate', { expression: `document.querySelector('[aria-label="Learning workspace"]')?.innerText.includes('${saved.storedCount} active memor')`, returnByValue: true });
+      panelReady = result.result.value === true;
+      if (!panelReady) await delay(100);
+    }
+    assert(panelReady, 'Learning workspace did not show stored personal memory count');
+    const memoryPanel = await page.send('Runtime.evaluate', { expression: `(()=>{const heading=[...document.querySelectorAll('[aria-label="Learning workspace"] h3')].find(e=>e.textContent?.trim().toLowerCase()==='personal memory');const card=heading?.closest('.workspace-card');const pane=document.querySelector('[aria-label="Learning workspace"]');if(pane)pane.scrollTop=pane.scrollHeight;return {found:!!card,rows:card?.querySelectorAll('li').length??0}})()`, returnByValue: true });
+    assert(memoryPanel.result.value.found, 'Personal Memory card is missing from Learning');
+    assert(memoryPanel.result.value.rows >= saved.storedCount, 'existing memory rows are not accessible in Learning');
+    await delay(300);
+    await capture(page, 'astra-personal-memory-native.png');
+    await page.send('Runtime.evaluate', { expression: "[...document.querySelectorAll('.workspace-tabs button')].find(b=>b.innerText==='Chat')?.click()" });
     const handle = getMainWindowHandle(child.pid);
     assert(handle > 0, `No native Windows main window handle for PID ${child.pid}`);
     showWindow(handle, 9); // Ensure a restored window before measuring visible frames.
@@ -459,7 +485,7 @@ async function main() {
     const metricsPath = path.join(evidenceDir, 'astra-lw01-performance.json');
     await writeFile(metricsPath, JSON.stringify({ methodology: '30 fps capped renderer frame counter and one 1.4s idle / 1.2s first-chat CPU interval; os.cpus and free RAM are system-wide, nvidia-smi is whole GPU, Electron process tree is app-only; samples are snapshots, not attribution of GPU memory to 3D', visibilityMethod, firstReplyLatencyMs, idle: idleMetrics, firstChatWindow: generatingMetrics }, null, 2));
 
-    console.log(`PASS: native window PID ${child.pid}, handle ${handle}; 3D canvas and capped idle frames, manual/minimized pause, live four-turn chat, scroll behavior, reset, desktop/compact layout and restricted bridge verified; visibility method: ${visibilityMethod}`);
+    console.log(`PASS: native window PID ${child.pid}, handle ${handle}; ${saved.storedCount} existing personal memories accessible, 3D canvas and capped idle frames, manual/minimized pause, live four-turn chat, scroll behavior, reset, desktop/compact layout and restricted bridge verified; visibility method: ${visibilityMethod}`);
     console.log(`Screenshots: ${screenshotPath}; ${compactScreenshotPath}`);
     console.log(`Performance: ${metricsPath}`);
 

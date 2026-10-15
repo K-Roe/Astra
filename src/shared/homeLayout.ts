@@ -21,7 +21,8 @@ export const HOME_ROOM: RoomLayout = {
     { id: 'living_stand', position: { x: -0.9, z: -0.55 }, facing: Math.PI },
     { id: 'sofa_front', position: { x: -0.9, z: -1.25 }, facing: 0, next: 'sofa_seat' },
     { id: 'sofa_seat', position: { x: -0.9, z: -1.85 }, facing: Math.PI },
-    { id: 'desk_front', position: { x: 2.25, z: -1.25 }, facing: 0, next: 'desk_seat' },
+    // Enter the chair from its left side; its back is on the walking side.
+    { id: 'desk_front', position: { x: 1.38, z: -2.2 }, facing: Math.PI / 2, next: 'desk_seat' },
     { id: 'desk_seat', position: { x: 2.25, z: -2.25 }, facing: 0 },
     { id: 'kitchen_front', position: { x: 3.15, z: 0.35 }, facing: Math.PI / 2 },
     { id: 'kitchen', position: { x: 3.4, z: 0.9 }, facing: Math.PI / 2 },

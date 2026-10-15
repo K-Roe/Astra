@@ -16,7 +16,7 @@ export interface MemoryCommandResult {
   readonly reply?: string;
   /** A suggested memory Karl has not accepted yet. Nothing is stored for it. */
   readonly suggestion?: { readonly text: string; readonly subject: string };
-  readonly action?: 'remembered' | 'updated' | 'forgot' | 'recalled' | 'conversation_forgotten' | 'suggested';
+  readonly action?: 'remembered' | 'updated' | 'forgot' | 'recalled' | 'conversation_forgotten' | 'explained' | 'suggested';
   readonly ok?: boolean;
 }
 
@@ -52,6 +52,15 @@ export class MemoryCommands {
   private run(intent: MemoryIntent, options: MemoryCommandOptions): MemoryCommandResult {
     try {
       switch (intent.kind) {
+        case 'explain_persistence': {
+          const count = this.memory.summary().count;
+          return {
+            handled: true,
+            action: 'explained',
+            ok: true,
+            reply: `This conversation is temporary and will not be available after Astra closes. Personal memory persists across restarts, but I save information only when you explicitly ask me to remember it or confirm a suggestion. You currently have ${count} saved personal memor${count === 1 ? 'y' : 'ies'}. Asking this question did not save anything.`,
+          };
+        }
         case 'remember': {
           const record = this.memory.remember({
             statement: intent.text,

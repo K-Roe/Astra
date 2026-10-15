@@ -73,7 +73,7 @@ function createFallbackMannequin(): THREE.Group {
 export function createLivingWorldScene(): LivingWorldScene {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#241f2c');
-  const initialFraming = homeCameraFraming(343, 261, 'overview');
+  const initialFraming = homeCameraFraming(343, 261, 'companion');
   const camera = new THREE.PerspectiveCamera(initialFraming.fovDegrees, initialFraming.aspect, 0.05, 45);
   camera.position.set(...initialFraming.position);
   camera.lookAt(...initialFraming.target);
@@ -125,7 +125,9 @@ export function createLivingWorldScene(): LivingWorldScene {
   box(scene, [0.07, 0.19, 0.06], [2.35, 0.86, -3.1], metal);
   box(scene, [0.62, 0.025, 0.15], [2.35, 0.8, -2.67], metal);
   box(scene, [0.48, 0.06, 0.45], [2.25, 0.41, -2.25], fabric);
-  box(scene, [0.48, 0.5, 0.07], [2.25, 0.69, -2.48], fabric);
+  // The back faces the walking area; the seated rig faces the monitor.
+  // The left side stays open for the approach route.
+  box(scene, [0.48, 0.5, 0.07], [2.25, 0.69, -1.99], fabric);
   for (const dx of [-0.19, 0.19]) for (const dz of [-0.18, 0.18]) box(scene, [0.04, 0.45, 0.04], [2.25 + dx, 0.22, -2.25 + dz], metal);
   box(scene, [0.65, 0.04, 0.26], [3.28, 1.4, -3.31], darkWood);
   sphere(scene, 0.13, [3.4, 1.58, -3.23], warmLight);

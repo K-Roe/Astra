@@ -12,7 +12,7 @@ function character(idleRandom = () => 0.5) {
   const object = new THREE.Group();
   const mixer = new THREE.AnimationMixer(object);
   const clips = new Map();
-  for (const name of ['idle_breathing', 'walk', 'turn_left', 'turn_right', 'sit_down', 'seated_idle', 'stand_up', 'thinking', 'wave']) {
+  for (const name of ['idle_breathing', 'walk', 'turn_left', 'turn_right', 'sit_down', 'seated_idle', 'stand_up', 'desk_work', 'thinking', 'wave']) {
     clips.set(name, new THREE.AnimationClip(name, 0.5, [new THREE.QuaternionKeyframeTrack('.quaternion', [0, 0.5], [0, 0, 0, 1, 0, 0, 0, 1])]));
   }
   let now = 0;
@@ -25,7 +25,7 @@ function character(idleRandom = () => 0.5) {
       controller.update(1 / 30);
     }
   };
-  return { controller, advance };
+  return { controller, advance, object };
 }
 
 test('only real active work maps to desk-work presentation', () => {
@@ -38,13 +38,15 @@ test('only real active work maps to desk-work presentation', () => {
 });
 
 test('active coding walks the single character to the desk and survives chat acknowledgement', () => {
-  const { controller, advance } = character();
+  const { controller, advance, object } = character();
   controller.setActivity('coding');
   advance(8);
   const atDesk = controller.getDiagnostics();
   assert.equal(atDesk.state, 'seated', JSON.stringify(atDesk));
   assert.equal(atDesk.waypoint, 'desk_seat');
   assert.equal(atDesk.activity, 'coding');
+  assert.equal(atDesk.clip, 'desk_work');
+  assert.ok(Math.abs(object.rotation.y - Math.PI) < 0.01, 'rig faces the monitor while working');
   controller.returnToCentre();
   advance(0.3);
   assert.equal(controller.getDiagnostics().waypoint, 'desk_seat', 'manual centre cannot interrupt approved work');
@@ -55,6 +57,7 @@ test('active coding walks the single character to the desk and survives chat ack
   assert.equal(controller.getDiagnostics().clip, 'seated_idle');
   controller.dispose();
 });
+
 
 test('interrupted work stops the route without teleporting', () => {
   const { controller, advance } = character();

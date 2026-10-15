@@ -20,3 +20,13 @@ test('follow keeps the character as focus; desk and sofa are stable named views'
   assert.equal(homeCameraFraming(343, 233, 'desk').target[0], 2.25);
   assert.equal(homeCameraFraming(343, 233, 'sofa').target[0], -0.9);
 });
+
+test('default companion view brings the main activity area closer than full overview', () => {
+  const near = homeCameraFraming(520, 400, 'companion');
+  const home = homeCameraFraming(520, 400, 'overview');
+  const range = (view) => Math.hypot(...view.position.map((value, index) => value - view.target[index]));
+  assert.ok(range(near) < range(home));
+  assert.ok(near.target[0] > 0 && near.target[0] < 2);
+  assert.ok(homeCameraFraming(520, 400, 'close').position[2] < homeCameraFraming(520, 400, 'follow').position[2]);
+  assert.ok(homeCameraFraming(520, 400, 'overhead').position[1] > 8);
+});

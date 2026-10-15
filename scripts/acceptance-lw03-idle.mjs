@@ -1,4 +1,4 @@
-/** Native, disposable-profile observation of LW-03's autonomous home life. */
+/** Native, disposable-profile observation of LW-03 idle life and controlled stand. */
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { createServer } from 'node:net';
@@ -111,11 +111,11 @@ try {
   let ready;
   for (let attempt = 0; attempt < 80; attempt++) {
     ready = await state(page);
-    if (ready.asset === 'ready' && ready.world === 'running' && await evaluate(page, "document.querySelector('.character-version-select select')?.value==='astra-character-v2'")) break;
+    if (ready.asset === 'ready' && ready.world === 'running' && ready.clip !== null && await evaluate(page, "document.querySelector('.character-version-select select')?.value==='astra-character-v2'")) break;
     await delay(150);
   }
-  assert(ready.asset === 'ready' && ready.world === 'running', `V2 native scene unavailable: ${JSON.stringify(ready)}`);
-  await screenshot(page, 'home-overview-native.png');
+  assert(ready.asset === 'ready' && ready.world === 'running' && ready.clip !== null, `V2 native scene unavailable: ${JSON.stringify(ready)}`);
+  await screenshot(page, 'home-default-correction-native.png');
   const observed = { start: ready, walk: null, sofa: null, stood: null, maxStepMetres: 0, frames: [] };
   let previous = ready;
   let previousAt = Date.now();
@@ -140,7 +140,7 @@ try {
     // than measuring it exactly. Walking is 0.62 m/s; anything beyond a
     // running pace between two observations would be a teleport.
     const allowed = gapSeconds * 1.4 + 0.2;
-    if (current.world === 'running' && step > allowed) throw new Error(`character moved ${step.toFixed(3)} m in ${gapSeconds.toFixed(2)} s, faster than walking between native observations`);
+    if (current.world === 'running' && step > allowed) throw new Error(`character moved ${step.toFixed(3)} m in ${gapSeconds.toFixed(2)} s, faster than walking between native observations: ${JSON.stringify({ previous, current })}`);
     if (current.fps > 0) observed.frames.push(current.fps);
     if (!observed.walk && current.state === 'walking') {
       observed.walk = { ...current, resources: resources(child.pid) };
@@ -148,11 +148,16 @@ try {
       await evaluate(page, "document.querySelector('[aria-label=\"Follow Astra with the camera\"]')?.click(); true");
       await delay(900);
       await screenshot(page, 'walking-follow-native.png');
-      await evaluate(page, "document.querySelector('[aria-label=\"Reset camera to automatic framing\"]')?.click(); true");
+      await evaluate(page, "(()=>{const s=document.querySelector('[aria-label=\"World camera view\"]');s.value='close';s.dispatchEvent(new Event('change',{bubbles:true}));return true})()");
+      await delay(900);
+      await screenshot(page, 'walking-close-native.png');
+      await evaluate(page, "(()=>{const s=document.querySelector('[aria-label=\"World camera view\"]');s.value='auto';s.dispatchEvent(new Event('change',{bubbles:true}));return true})()");
     }
     if (!observed.sofa && current.state === 'seated' && current.waypoint === 'sofa_seat') {
       observed.sofa = { ...current, resources: resources(child.pid) };
       await screenshot(page, 'sofa-native.png');
+      await evaluate(page, "document.querySelector('[aria-label=\"Bring Astra to the centre of the room\"]')?.click(); true");
+      observed.centreRequestedFromSofa = true;
     }
     if (observed.sofa && current.state === 'standing_up') {
       observed.stood = { ...current, resources: resources(child.pid) };
@@ -171,8 +176,8 @@ try {
   writeFileSync(path.join(output, 'idle-native.json'), JSON.stringify(summary, null, 2));
   assert(observed.walk, 'No autonomous walk observed');
   assert(observed.sofa, 'No autonomous sofa sit observed within 210 seconds');
-  assert(observed.stood, 'Astra did not stand after relaxing on the sofa within 210 seconds');
-  console.log(`PASS LW-03 idle: walk, sofa sit, stand; max observed step ${observed.maxStepMetres.toFixed(3)} m; ${summary.averageDisplayedFps} displayed fps`);
+  assert(observed.stood, 'Centre control did not start a stand from the sofa');
+  console.log(`PASS LW-03 idle: autonomous walk and sofa sit, Centre-triggered stand; max observed step ${observed.maxStepMetres.toFixed(3)} m; ${summary.averageDisplayedFps} displayed fps`);
   console.log(`Evidence: ${path.join(output, 'idle-native.json')}`);
   await browser.send('Target.closeTarget', { targetId: target.id });
   if (child.exitCode === null) await Promise.race([new Promise((resolve) => child.once('exit', resolve)), delay(10000).then(() => { throw new Error('Electron did not exit'); })]);

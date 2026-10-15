@@ -29,6 +29,7 @@ export function App() {
   const [scrolledUp, setScrolledUp] = useState(false);
   const [memorySuggestion, setMemorySuggestion] = useState<{ text: string; subject: string } | null>(null);
   const [memoryCount, setMemoryCount] = useState(0);
+  const [memoryAvailable, setMemoryAvailable] = useState(false);
   const [memoryNotice, setMemoryNotice] = useState('');
   const [idleEnabled, setIdleEnabled] = useState(true);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceId>('conversation');
@@ -58,6 +59,7 @@ export function App() {
     setDetail(status.detail);
     setMemorySuggestion(status.memorySuggestion ?? null);
     setMemoryCount(status.memoryCount ?? 0);
+    setMemoryAvailable(status.memoryAvailable);
   }
 
   /**
@@ -71,9 +73,23 @@ export function App() {
       const result = await memory.remember({ statement: memorySuggestion.text, subject: memorySuggestion.subject });
       setMemorySuggestion(null);
       setMemoryNotice(result.ok ? `Saved: ${result.value.statement}` : `Not saved: ${result.error}`);
-      setMemoryCount((count) => (result.ok ? count + 1 : count));
+      if (result.ok) {
+        const summary = await memory.summary();
+        setMemoryAvailable(summary.ok);
+        if (summary.ok) setMemoryCount(summary.value.count);
+      }
     } catch (error) {
       setMemoryNotice(`Not saved: ${error instanceof Error ? error.message : 'memory service unavailable'}`);
+    }
+  }
+
+  function selectWorkspace(workspace: WorkspaceId): void {
+    setActiveWorkspace(workspace);
+    if (workspace === 'conversation') {
+      void window.astra.getChatStatus().then((status) => {
+        setMemoryAvailable(status.memoryAvailable);
+        setMemoryCount(status.memoryCount ?? 0);
+      }).catch(() => setMemoryAvailable(false));
     }
   }
 
@@ -254,7 +270,7 @@ export function App() {
       <section className="app-frame" aria-labelledby="app-title">
         <header className="app-header">
           <div className="brand"><span className="brand-symbol" aria-hidden="true">✦</span><div><p className="brand-kicker">YOUR LOCAL COMPANION</p><h1 id="app-title">ASTRA</h1></div></div>
-          <div className="header-meta"><span className="session-label">SESSION ONLY</span><span className="header-divider" aria-hidden="true" /><span className="header-model">GEMMA 3 4B</span></div>
+          <div className="header-meta"><span className="session-label">CHAT: THIS SESSION</span><span className="header-divider" aria-hidden="true" /><span className="header-model">GEMMA 3 4B</span></div>
         </header>
 
         <div className="workspace-grid">
@@ -283,7 +299,7 @@ export function App() {
                   type="button"
                   className={activeWorkspace === entry.id ? 'active' : ''}
                   aria-pressed={activeWorkspace === entry.id}
-                  onClick={() => setActiveWorkspace(entry.id)}
+                  onClick={() => selectWorkspace(entry.id)}
                 >
                   {entry.label}
                 </button>
@@ -294,7 +310,7 @@ export function App() {
               <>
             <div className="conversation-wrap">
               <div className="conversation" ref={conversationRef} onScroll={onConversationScroll} aria-label="Conversation" aria-live="polite">
-                {messages.length === 0 && !pending && <div className="welcome"><span className="welcome-symbol" aria-hidden="true">✦</span><h3>Hi, Karl.</h3><p>I'm here and ready to talk. What's on your mind?</p><small>This conversation stays in this session. I don't have personal memory yet.</small></div>}
+                {messages.length === 0 && !pending && <div className="welcome"><span className="welcome-symbol" aria-hidden="true">✦</span><h3>Hi, Karl.</h3><p>I'm here and ready to talk. What's on your mind?</p><small>{memoryAvailable ? 'Your conversation is temporary, but Astra can remember information you ask her to save.' : 'Your conversation is temporary. Personal memory is currently unavailable.'}</small></div>}
                 {messages.map((message, index) => <article className={`message-row message-${message.role}`} key={index}><span className="message-avatar" aria-hidden="true">{message.role === 'user' ? 'K' : '✦'}</span><div className="message-bubble"><p className="message-label">{message.role === 'user' ? 'You' : 'Astra'}</p><MessageContent content={message.content} /></div></article>)}
                 {pending && <article className="message-row message-user"><span className="message-avatar" aria-hidden="true">K</span><div className="message-bubble"><p className="message-label">You</p><MessageContent content={pending} /></div></article>}
                 {phase === 'generating' && <div className="typing" aria-label="Astra is thinking"><span className="typing-dot" aria-hidden="true" />Astra is thinking…</div>}
@@ -339,7 +355,7 @@ export function App() {
               ) : null}
               <div className="status-line" data-phase={phase}><p role="status">{detail}</p><div className="actions">{phase === 'error' && <button type="button" className="text-button" onClick={() => void refresh()}>Retry connection</button>}{phase === 'generating' && <button type="button" className="text-button" onClick={() => void cancelCurrentRequest()}>Cancel request</button>}<button type="button" className="text-button" onClick={() => void clearConversation()} disabled={messages.length === 0 && !pending}>Clear conversation</button></div></div>
               <form className="composer" onSubmit={(event) => void send(event)}><label htmlFor="message-input" className="sr-only">Message Astra</label><textarea id="message-input" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleKeyDown} placeholder="Message Astra…" rows={2} maxLength={8000} disabled={phase === 'connecting' || phase === 'generating'} /><button type="submit" className="send-button" disabled={!draft.trim() || phase === 'connecting' || phase === 'generating'}>Send <span aria-hidden="true">↗</span></button></form>
-              <div className="conversation-footer"><div className="voice-reserved" aria-label="Future voice controls"><button type="button" disabled aria-label="Microphone unavailable">Mic unavailable</button><button type="button" disabled aria-label="Audio unavailable">Audio unavailable</button></div><span>LOCAL CHAT · {memoryCount} PERSONAL MEMORIES ON DISK</span></div>
+              <div className="conversation-footer"><div className="voice-reserved" aria-label="Future voice controls"><button type="button" disabled aria-label="Microphone unavailable">Mic unavailable</button><button type="button" disabled aria-label="Audio unavailable">Audio unavailable</button></div><span>{memoryAvailable ? `PERSONAL MEMORY AVAILABLE · ${memoryCount} SAVED` : 'PERSONAL MEMORY UNAVAILABLE'}</span></div>
             </div>
               </>
             ) : null}

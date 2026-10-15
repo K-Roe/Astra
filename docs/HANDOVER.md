@@ -1,5 +1,11 @@
 # Handover for the next AI agent
 
+## LW-03 correction handover (2026-10-15; PARTIAL)
+
+This correction follows `9f29aa8`; inspect the current Git status before further work. `ChatStatus.memoryAvailable` is derived from a successful personal-memory summary read, while chat turns remain in process memory. `AvatarPanel` keeps the active V1/V2 id in local renderer storage only after an explicit selection and forbids changes during real coding/learning work. A fresh profile still selects V1. `HOME_ROOM.desk_front` is now left of the chair, the visible chair back is behind Astra, and `desk_seat.facing = 0` points to the monitor. `homeCamera.ts` provides the default companion frame and selectable inspection views through the one capped viewport.
+
+Native front/side/overhead captures and a genuine seated V2 `desk_work` Learning timeline are in `docs/review/lw03/` and `test-results/lw03/learning-native.json`. The real-profile desktop check passed with three existing memory rows visible in Learning; the disposable V2 preference survived a full restart. `MemoryCommands` now answers questions about Astra's own memory persistence from its real summary before research or Gemma, after a live model reply falsely implied it had saved a test word. Final checks on 2026-10-15: lint clean, `npm test` 286/286 with build, native memory 32/32, CA-01 82/82, idle/sofa/Centre stand pass, real Learning seated desk work pass, flagged real-profile desktop pass. Do not claim Karl approved V2, do not push or start another milestone. The separate false generated save claim for unusual quoted hostile input is recorded in `docs/CURRENT_STATE.md` as a remaining limitation.
+
 ## Personal Memory V1 handover (2026-10-14) — COMPLETE within verified limits
 
 Read `docs/PERSONAL_MEMORY_V1.md` first. Karl can now say "remember that…", "what do you remember…", "actually, I prefer…" and "forget that…" in ordinary chat, or use the Personal Memory panel in the Learning workspace. Memory is retrieval from the existing intelligence database, **not model training**. `PersonalMemoryService` owns it; `MemoryCommands` executes validated operations; `detectMemoryIntent` is a pure parser; `ChatService` receives a narrow `MemoryChatPort` and can neither reach the database nor run a model as an authority.

@@ -91,6 +91,7 @@ test('memory saved in one session is injected into a later prompt', async () => 
     assert.match(prompts[0], /personal (?:memory|context)/i);
     assert.match(prompts[0], /React and TypeScript/);
     assert.equal(status.memoryCount, 1);
+    assert.equal(status.memoryAvailable, true);
   } finally {
     memory.close();
   }
@@ -121,6 +122,21 @@ test('a memory command is answered from the database, not invented by the model'
     const last = recalled.messages.at(-1);
     assert.match(last.content, /Neovim/);
     // No model call was made for the memory commands themselves.
+    assert.equal(prompts.length, 0);
+  } finally {
+    memory.close();
+  }
+});
+
+test('persistence questions use the real memory service and save nothing', async () => {
+  const memory = fresh();
+  try {
+    const { fetchImpl, prompts } = fakeOllama('I already saved the word.');
+    const chat = new ChatService('personality', fetchImpl, undefined, undefined, memory.port);
+    const answer = await chat.send('Will you remember this test word after I close Astra?');
+    assert.match(answer.messages.at(-1).content, /conversation is temporary/i);
+    assert.match(answer.messages.at(-1).content, /did not save anything/i);
+    assert.equal(answer.memoryCount, 0);
     assert.equal(prompts.length, 0);
   } finally {
     memory.close();
@@ -163,6 +179,23 @@ test('without a memory port the chat still works and claims no memory', async ()
     const status = await chat.send('Hello there');
     assert.equal(status.state, 'ready');
     assert.match(prompts[0], /has not saved any personal memory|ordinary conversation/i);
+    assert.equal(status.memoryCount, 0);
+    assert.equal(status.memoryAvailable, false);
+  } finally {
+    memory.close();
+  }
+});
+
+test('a failed memory-service read is shown as unavailable', async () => {
+  const memory = fresh();
+  try {
+    const { fetchImpl } = fakeOllama();
+    const chat = new ChatService('personality', fetchImpl, undefined, undefined, {
+      ...memory.port,
+      summary: () => { throw new Error('database unavailable'); },
+    });
+    const status = await chat.getStatus();
+    assert.equal(status.memoryAvailable, false);
     assert.equal(status.memoryCount, 0);
   } finally {
     memory.close();

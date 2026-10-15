@@ -33,6 +33,8 @@ export interface ChatStatus {
   readonly memorySuggestion?: { readonly text: string; readonly subject: string } | null;
   /** How many personal memories are currently active. */
   readonly memoryCount?: number;
+  /** True only when the persistent personal-memory service is connected. */
+  readonly memoryAvailable: boolean;
 }
 
 export interface AstraBridge {

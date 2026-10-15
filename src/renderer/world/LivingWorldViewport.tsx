@@ -58,7 +58,7 @@ export const LivingWorldViewport = memo(function LivingWorldViewport({
   const [userPaused, setUserPaused] = useState(false);
   const [availability, setAvailability] = useState<'loading' | 'ready' | 'unavailable'>('loading');
   const [characterStatus, setCharacterStatus] = useState<CharacterStatus>('loading');
-  const [cameraChoice, setCameraChoice] = useState<'auto' | 'overview' | 'follow'>('auto');
+  const [cameraChoice, setCameraChoice] = useState<'auto' | HomeCameraMode>('auto');
   const cameraChoiceRef = useRef(cameraChoice);
   cameraChoiceRef.current = cameraChoice;
   const pausedRef = useRef(false);
@@ -88,7 +88,7 @@ export const LivingWorldViewport = memo(function LivingWorldViewport({
     worldRef.current = world;
     world.setMonitorActivity(activityRef.current === 'learning' ? 'learning' : activityRef.current === 'coding' ? 'coding' : 'idle');
     const targetCamera = world.camera.position.clone();
-    const targetLook = new THREE.Vector3(...homeCameraFraming(343, 261, 'overview').target);
+    const targetLook = new THREE.Vector3(...homeCameraFraming(343, 261, 'companion').target);
     const currentLook = targetLook.clone();
     let targetFov = world.camera.fov;
     const samples: WorldFrameSample[] = [];
@@ -175,7 +175,7 @@ export const LivingWorldViewport = memo(function LivingWorldViewport({
       let mode: HomeCameraMode = cameraChoiceRef.current === 'auto'
         ? activityRef.current === 'coding' || activityRef.current === 'learning'
           ? 'desk'
-          : diagnostics?.state === 'seated' && diagnostics.waypoint === 'sofa_seat' ? 'sofa' : 'overview'
+          : diagnostics?.state === 'seated' && diagnostics.waypoint === 'sofa_seat' ? 'sofa' : 'companion'
         : cameraChoiceRef.current;
       if (mode === 'desk' && !controller) mode = 'overview';
       const framing = homeCameraFraming(canvas!.clientWidth, canvas!.clientHeight, mode, position.x, position.z);
@@ -219,7 +219,7 @@ export const LivingWorldViewport = memo(function LivingWorldViewport({
     const resize = () => {
       const { width, height } = container.getBoundingClientRect();
       if (width < 1 || height < 1) return;
-      const framing = homeCameraFraming(width, height, 'overview');
+      const framing = homeCameraFraming(width, height, 'companion');
       world.camera.aspect = framing.aspect;
       world.camera.updateProjectionMatrix();
       targetCamera.set(...framing.position);
@@ -330,9 +330,17 @@ export const LivingWorldViewport = memo(function LivingWorldViewport({
           <button className="world-action" type="button" onClick={onCentreRequest} disabled={characterStatus !== 'ready'} aria-label="Bring Astra to the centre of the room">
             Centre
           </button>
-          <button className="world-action" type="button" onClick={() => setCameraChoice('overview')} aria-label="Show the whole home">Home</button>
-          <button className="world-action" type="button" onClick={() => setCameraChoice('follow')} aria-label="Follow Astra with the camera">Follow</button>
-          <button className="world-action" type="button" onClick={() => setCameraChoice('auto')} aria-label="Reset camera to automatic framing">Reset camera</button>
+          <button className="world-action" type="button" onClick={() => setCameraChoice('follow')} aria-label="Follow Astra with the camera" aria-pressed={cameraChoice === 'follow'}>Follow</button>
+          <label className="world-view-select">View <select aria-label="World camera view" value={cameraChoice} onChange={(event) => setCameraChoice(event.target.value as 'auto' | HomeCameraMode)}>
+            <option value="auto">Automatic</option>
+            <option value="companion">Astra, desk and sofa</option>
+            <option value="overview">Whole home</option>
+            <option value="follow">Follow Astra</option>
+            <option value="close">Astra close</option>
+            <option value="desk">Desk front</option>
+            <option value="deskSide">Desk side</option>
+            <option value="overhead">Overhead</option>
+          </select></label>
           {characterStatus === 'loading' && <span className="world-status">Loading Astra…</span>}
           {characterStatus === 'fallback' && <span className="world-status">Placeholder character</span>}
         </div>

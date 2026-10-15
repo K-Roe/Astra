@@ -174,6 +174,15 @@ if (current.activity === 'learning' && current.waypoint === 'desk_seat' && SEATE
         deskShot = true;
         deskResources = resources(child.pid);
         await screenshot(page, 'learning-desk-native.png');
+        for (const [view, filename] of [
+          ['desk', 'desk-front-correction-native.png'],
+          ['deskSide', 'desk-side-correction-native.png'],
+          ['overhead', 'desk-overhead-correction-native.png'],
+        ]) {
+          await evaluate(page, `(()=>{const s=document.querySelector('[aria-label="World camera view"]');s.value='${view}';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()`);
+          await delay(1300);
+          await screenshot(page, filename);
+        }
       }
       // Hold the observation briefly so the seated work pose is captured live.
       const holdUntil = Date.now() + 4000;

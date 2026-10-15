@@ -22,3 +22,14 @@ test('all four home zones and both furniture seats have destinations', () => {
     assert.ok(ids.has(id), `missing ${id}`);
   }
 });
+
+test('desk chair has a clear side approach and its seated facing points at the monitor', () => {
+  const approach = HOME_ROOM.waypoints.find((point) => point.id === 'desk_front');
+  const seat = HOME_ROOM.waypoints.find((point) => point.id === 'desk_seat');
+  assert(approach && seat);
+  assert.ok(approach.position.x < seat.position.x - 0.6);
+  assert.ok(Math.abs(approach.position.z - seat.position.z) < 0.2);
+  assert.equal(approach.next, 'desk_seat');
+  assert.equal(seat.facing, 0, 'negative Z points from chair to monitor');
+  assert.equal(planPath('desk_front', 'desk_seat', HOME_ROOM).length, 2);
+});

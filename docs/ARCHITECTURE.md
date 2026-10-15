@@ -1,5 +1,9 @@
 # Project ASTRA architecture
 
+## LW-03 UI and world correction (2026-10-15)
+
+Chat history still lives only in the running `ChatService`. Its `ChatStatus` now reports `memoryAvailable` and the active count from a successful read of the persistent Personal Memory service; the renderer labels conversation history and personal memory separately. `MemoryCommands` answers questions about Astra's own memory persistence from that service before model generation or research retrieval. The V2 selector stores only the preview asset id in renderer local storage, while V1 remains the fresh-profile default. Changing rigs is disabled during coding or learning work. The chair's side approach and negative-Z seated facing share `HOME_ROOM` with the visible chair and monitor. `homeCamera.ts` provides the closer default companion view plus follow, close, full-home, desk front, desk side and overhead views; the existing capped Three.js viewport remains the sole renderer.
+
 ## Personal Memory V1 extension (2026-10-14, complete within verified limits)
 
 `src/main/memory/personalMemory.ts` owns personal memory in the **existing** intelligence database; there is no second store. Migration 3 extends `memory` (`subject`, `status`, `origin`, `sensitivity`, `conversation_ref`, `forgotten_at`, `superseded_reason`) and adds `memory_events` and `settings`. `MemoryStore` remains the Intelligence V1 primitive; the personal service adds lifecycle, provenance, superseding, a bounded context block and a revision counter that invalidates caches on every write.

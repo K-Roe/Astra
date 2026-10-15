@@ -56,7 +56,7 @@ export class ChatService {
   private codingBusy = false;
   private codingAbort: AbortController | null = null;
   private generation = 0;
-  private detail = 'Local model ready. Conversation stays in this running session.';
+  private detail = 'Local model ready. Conversation history is temporary.';
   private memorySuggestion: { text: string; subject: string } | null = null;
 
   constructor(
@@ -110,19 +110,30 @@ export class ChatService {
   }
 
   private snapshot(state: ChatStatus['state']): ChatStatus {
+    let memoryCount = 0;
+    let memoryAvailable = false;
+    try {
+      if (this.memory) {
+        memoryCount = this.memory.summary().count;
+        memoryAvailable = true;
+      }
+    } catch {
+      // A failed database read is unavailable, even if a port was injected.
+    }
     return {
       state,
       detail: this.detail,
       messages: this.history.map((message) => ({ ...message })),
       memorySuggestion: this.memorySuggestion ? { ...this.memorySuggestion } : null,
-      memoryCount: this.memory?.summary().count ?? 0,
+      memoryCount,
+      memoryAvailable,
     };
   }
 
   async getStatus(): Promise<ChatStatus> {
     try {
       await this.verifyModel(AbortSignal.timeout(5000));
-      this.detail = 'Local model ready. Conversation stays in this running session.';
+      this.detail = 'Local model ready. Conversation history is temporary.';
       return this.snapshot('ready');
     } catch (error) {
       this.detail = this.describe(error);
@@ -321,6 +332,8 @@ function describeMemoryAction(action: MemoryCommandResult['action']): string {
       return 'Nothing from this conversation will be remembered.';
     case 'recalled':
       return 'Answered from stored personal memory.';
+    case 'explained':
+      return 'Explained chat and personal-memory persistence. Nothing saved.';
     default:
       return 'Local model ready.';
   }
