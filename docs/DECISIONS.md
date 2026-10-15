@@ -1,5 +1,9 @@
 # Project ASTRA decisions
 
+## ADR-034 — Qwen may draft a file, but CA-01 alone may write it (Implementation under acceptance, 2026-10-15)
+
+Karl authorised CA-01B to remove the requirement for user-supplied fenced code. Deterministic chat routing resolves a file target inside the configured root before model inference. The installed local coding model receives a bounded objective and relevant existing file context as untrusted data, returning only candidate content. `CodingBridge` validates a fresh `DirectFilePlan` and submits the complete content to the existing CA-01 approval engine. The model never supplies an approval, execution result or destination outside the trusted resolver. A create request targeting an existing file is refused; Karl must explicitly request an edit or replacement. This preserves the original direct-file hash check and disk readback while allowing Astra to author proposals. Native UI approval remains a separate owner decision.
+
 ## ADR-033 — Approved direct files use exact plans and disk verification (Implemented, 2026-10-15)
 
 Ordinary chat file requests are classified before Gemma, then handled by the existing main-process CA-01 task and approval path. Read is bounded and read-only; create, replace, edit and delete require an absolute path under the configured repository root and a separate reviewed plan. The plan includes the target, action, full new content where applicable, and the current file hash. Execution checks that hash again and verifies the resulting bytes or absence on disk before reporting completion. Creation can make a missing parent directory under that root but never starts Git. The older renderer-supplied `writes` argument is rejected because its contents were not in the approved plan. The model may describe a proposal, but cannot authorise a file mutation or confirm one without a verified task result.

@@ -1,5 +1,9 @@
 # Project ASTRA architecture
 
+## 2026-10-15 CA-01B authoring extension
+
+`codingIntent.ts` recognises natural-language file requests, including README, Vue component and Laravel controller phrasing. `CodingBridge` resolves a direct child directory or selected project under the configured root, validates the destination through `planDirectFileAction`, and optionally reads bounded existing file and local README/package context. `codingModel.ts` calls the installed local Qwen model for one structured `content` string; the response is untrusted proposal data. The bridge rechecks the prior file hash after drafting and passes the exact generated content into `CodingAgent.beginTask`. Chat and Coding show the proposal. Only the existing explicit approval and `executeFileOperation` may write or delete, and the latter verifies disk bytes or absence. Fenced content still works without a model call. The native CA-01B harness leaves every approval and rejection to Karl in the visible Electron window.
+
 ## 2026-10-15 direct file correction
 
 The normal chat composer passes file intents through `ChatService` to `CodingBridge`. `codingIntent.ts` extracts an absolute file path; the bridge reads through `readDirectFile` or builds an exact `DirectFilePlan` in main. `CodingAgent.beginTask` shows that plan in chat and Coding, and `executeApproved` calls `executeFileOperation` only after Karl approves the same scope. `fileTools.ts` confines the target to the configured root, checks the pre-operation hash, performs the action and reads back the result before emitting `file.verified`. This also works in a plain directory with no selected Git repository. The prior generic Coding IPC cannot supply unreviewed write content. Gemma only receives unmatched conversation and cannot grant filesystem authority.

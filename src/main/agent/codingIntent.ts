@@ -97,11 +97,11 @@ const RULES: readonly Rule[] = [
   { kind: 'list_repositories', pattern: /\b(list|show|what are)\b.*\b(repositor(y|ies)|projects)\b|\bmy repositor/i },
   { kind: 'run_tests', pattern: /\b(run|execute)\b.*\b(test|tests|test suite|npm test)\b/i },
   { kind: 'delete_file', pattern: /\b(delete|remove)\b.*(?:\bfile\b|\.[A-Za-z0-9]{1,8}\b)/i },
-  { kind: 'edit_file', pattern: /\b(edit|update|change|replace)\b.*(?:\bfile\b|\.[A-Za-z0-9]{1,8}\b)/i },
+  { kind: 'edit_file', pattern: /\b(edit|update|change|replace)\b.*(?:\bfile\b|\bcontents?\b|\bfunction\b|\.[A-Za-z0-9]{1,8}\b)/i },
   { kind: 'read_file', pattern: /\b(read|show|display)\b.*(?:\bfile\b|\.[A-Za-z0-9]{1,8}\b)/i },
   { kind: 'read_file', pattern: /\b(?:does|is)\b.*\bfile\b.*\b(?:exist|there|present)\b/i },
-  { kind: 'create_file', pattern: /\b(create|make|add)\b.*(?:\bfile\b|\.[A-Za-z0-9]{1,8}\b)/i },
-  { kind: 'write_file', pattern: /\b(write|save)\b.*(?:\bfile\b|\.[A-Za-z0-9]{1,8}\b)/i },
+  { kind: 'create_file', pattern: /\b(create|make|add)\b.*(?:\bfile\b|\bcomponent\b|\bcontroller\b|\bREADME\b|\.[A-Za-z0-9]{1,8}\b)/i },
+  { kind: 'write_file', pattern: /\b(write|save)\b.*(?:\bfile\b|\bREADME\b|\.[A-Za-z0-9]{1,8}\b)/i },
   { kind: 'create_repository', pattern: /\b(create|make|start|scaffold|set up|new)\b.*\b(repo(?:sitory|sitories)?|project|app|application|dashboard|service|site)\b/i },
   // "create a new repository called X" also matches, but only after the more
   // specific "called/named X" form below has had a chance to run.

@@ -567,6 +567,84 @@ test('chat file create, read, edit and delete share CA-01 approval and verified 
   } finally { cleanup(); }
 });
 
+test('natural-language JavaScript file is model-authored then bound to approval', async () => {
+  const { agent, root, sandbox, cleanup } = lab();
+  const target = path.join(root, 'astraBlog', 'AstraBackstory.js');
+  const content = "export const AstraBackstory = { purpose: 'help Karl build safely' };\n";
+  let calls = 0;
+  try {
+    const bridge = new CodingBridge(agent, sandbox, proposeFixture, () => false, () => ({ permitted: true, reason: '' }), async (objective, destination, existing) => {
+      calls += 1;
+      assert.match(objective, /backstory/);
+      assert.equal(destination, target);
+      assert.equal(existing, null);
+      return content;
+    });
+    const proposed = await bridge.handle('Astra, create a JavaScript file in astraBlog called AstraBackstory.js containing your backstory.');
+    assert.equal(calls, 1);
+    assert.equal(proposed.snapshot?.plan?.fileOperation?.content, content);
+    assert.match(proposed.reply, /Full proposed content/);
+    assert.equal(existsSync(target), false);
+    assert.throws(() => agent.executeFileOperation(), /not been approved/);
+    agent.approve();
+    agent.executeFileOperation();
+    await agent.review();
+    await agent.complete();
+    assert.equal(readFileSync(target, 'utf8'), content);
+  } finally { cleanup(); }
+});
+
+test('natural-language Vue component and README use the selected project and preserve rejection', async () => {
+  const { agent, repo, sandbox, cleanup } = selectedLab();
+  const component = path.join(repo, 'SettingsPanel.vue');
+  try {
+    const bridge = new CodingBridge(agent, sandbox, proposeFixture, () => false, () => ({ permitted: true, reason: '' }), async (_objective, target, previous) => {
+      if (target === component) { assert.equal(previous, null); return '<template><section>Settings</section></template>\n'; }
+      assert.equal(target, path.join(repo, 'README.md'));
+      assert.match(previous, /DemoApp/);
+      return '# Updated DemoApp\n';
+    });
+    await bridge.handle('Make a Vue 3 component for a settings panel.');
+    assert.equal(existsSync(component), false);
+    agent.reject('Karl declined');
+    assert.equal(existsSync(component), false);
+    await bridge.handle('Make a Vue 3 component for a settings panel.');
+    agent.approve();
+    agent.executeFileOperation();
+    await agent.review();
+    await agent.complete();
+    assert.match(readFileSync(component, 'utf8'), /<template>/);
+    const beforeReadme = readFileSync(path.join(repo, 'README.md'), 'utf8');
+    const proposal = await bridge.handle('Write a README explaining this project.');
+    assert.match(proposal.reply, /Existing content/);
+    assert.equal(readFileSync(path.join(repo, 'README.md'), 'utf8'), beforeReadme);
+    agent.approve();
+    agent.executeFileOperation();
+    await agent.review();
+    await agent.complete();
+    assert.equal(readFileSync(path.join(repo, 'README.md'), 'utf8'), '# Updated DemoApp\n');
+  } finally { cleanup(); }
+});
+
+test('generated edit sees current content and fails when that content changes before approval', async () => {
+  const { agent, repo, sandbox, cleanup } = selectedLab();
+  const target = path.join(repo, 'src', 'sum.js');
+  const revised = 'export function sum(a, b) { return a + b; }\n';
+  try {
+    const bridge = new CodingBridge(agent, sandbox, proposeFixture, () => false, () => ({ permitted: true, reason: '' }), async (_objective, destination, existing) => {
+      assert.equal(destination, target);
+      assert.match(existing, /return a - b/);
+      return revised;
+    });
+    await bridge.handle(`Replace the contents of this file ${target} with a cleaner implementation.`);
+    assert.match(readFileSync(target, 'utf8'), /return a - b/);
+    writeFileSync(target, 'external change\n');
+    agent.approve();
+    assert.throws(() => agent.executeFileOperation(), /changed since planning/);
+    assert.equal(readFileSync(target, 'utf8'), 'external change\n');
+  } finally { cleanup(); }
+});
+
 test('the chat bridge lists repositories and never invokes the model', async () => {
   const { agent, sandbox, cleanup } = lab();
   try {

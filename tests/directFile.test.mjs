@@ -24,6 +24,11 @@ test('ordinary file requests route to trusted tools with the exact absolute path
   }
   assert.equal(routeCodingIntent('Create a new Git repository called AstraStone.').kind, 'create_repository');
   assert.equal(routeCodingIntent(`Does the file ${target} exist?`).kind, 'read_file');
+  assert.equal(routeCodingIntent('Make a Vue 3 component for a settings panel.').kind, 'create_file');
+  assert.equal(routeCodingIntent('Write a README explaining this project.').kind, 'write_file');
+  assert.equal(routeCodingIntent('Create a Laravel controller for managing profiles.').kind, 'create_file');
+  assert.equal(routeCodingIntent('Update this function to handle validation errors.').kind, 'edit_file');
+  assert.equal(routeCodingIntent('Replace the contents of this file with a cleaner implementation.').kind, 'edit_file');
 });
 
 test('approved create makes only the named directory and file, then verifies exact bytes', () => fixture(({ root, sandbox, target }) => {
@@ -62,12 +67,29 @@ test('missing files, occupied creates and changed files fail without overwriting
   assert.equal(readFileSync(target, 'utf8'), 'external change\n');
 }));
 
+test('a stale delete plan is refused and the changed file is preserved', () => fixture(({ sandbox, target }) => {
+  const initial = 'export const value = 1;\n';
+  executeDirectFileAction(planDirectFileAction(target, sandbox, 'create', initial), sandbox);
+  const staleDelete = planDirectFileAction(target, sandbox, 'delete');
+  writeFileSync(target, 'changed after planning\n');
+  assert.throws(() => executeDirectFileAction(staleDelete, sandbox), /changed since planning/);
+  assert.equal(readFileSync(target, 'utf8'), 'changed after planning\n');
+  executeDirectFileAction(planDirectFileAction(target, sandbox, 'delete'), sandbox);
+  assert.equal(existsSync(target), false);
+}));
+
 test('permission failures and readback mismatches never report verified success', () => fixture(({ sandbox, target }) => {
   const plan = planDirectFileAction(target, sandbox, 'create', 'approved\n');
   assert.throws(() => executeDirectFileAction(plan, sandbox, { write() { const error = new Error('blocked'); error.code = 'EACCES'; throw error; } }), /permission denied/);
   assert.equal(existsSync(target), false);
   assert.throws(() => executeDirectFileAction(plan, sandbox, { write(file) { writeFileSync(file, 'wrong\n'); } }), /verification failed/);
   assert.equal(readFileSync(target, 'utf8'), 'wrong\n');
+}));
+
+test('an approved digest mismatch reports the observed file state, not success or rollback', () => fixture(({ sandbox, target }) => {
+  const plan = planDirectFileAction(target, sandbox, 'create', 'approved\n');
+  assert.throws(() => executeDirectFileAction({ ...plan, expectedSha256: '0'.repeat(64) }, sandbox), /observed 9 bytes, SHA-256 .*file may remain on disk/);
+  assert.equal(readFileSync(target, 'utf8'), 'approved\n');
 }));
 
 test('path escape and sensitive directories are refused before planning', () => fixture(({ root, sandbox }) => {

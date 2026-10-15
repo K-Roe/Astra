@@ -11,7 +11,7 @@ import { discoverRepositories, readProjectFile, searchProjectCode, describeProje
 import { type SandboxOptions } from '../workspace/pathGuard';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { proposeCodingPatch, type ModelProposal } from './codingModel';
+import { proposeCodingPatch, proposeFileContent, type ModelProposal } from './codingModel';
 import { gitStatus } from '../workspace/fileTools';
 import { planDirectFileAction, readDirectFile, type DirectFileAction } from '../workspace/fileTools';
 import { PRELIMINARY_CODING_RELIABILITY, routeTask } from '../models/codingBenchmark';
@@ -48,6 +48,7 @@ export class CodingBridge {
     private readonly proposer: (objective: string, repository: string, files: readonly string[], sandbox: SandboxOptions, request?: typeof fetch, cancellation?: AbortSignal) => Promise<ModelProposal> = proposeCodingPatch,
     private readonly isExecuting: () => boolean = () => false,
     private readonly codingRoute: () => { permitted: boolean; reason: string } = () => routeTask('coding', { codingReliability: PRELIMINARY_CODING_RELIABILITY }),
+    private readonly fileProposer: typeof proposeFileContent = proposeFileContent,
   ) {}
 
   onActivity(listener: (event: ToolEvent, snapshot: TaskSnapshot) => void): () => void {
@@ -93,7 +94,7 @@ export class CodingBridge {
       case 'write_file':
       case 'edit_file':
       case 'delete_file':
-        return this.proposeFileOperation(intent.kind.replace('_file', '') as DirectFileAction, message);
+        return this.proposeFileOperation(intent.kind.replace('_file', '') as DirectFileAction, message, cancellation);
       default:
         return null;
     }
@@ -402,19 +403,35 @@ export class CodingBridge {
     }
   }
 
-  private async proposeFileOperation(action: DirectFileAction, message: string): Promise<ChatToolResult> {
+  private async proposeFileOperation(action: DirectFileAction, message: string, cancellation?: AbortSignal): Promise<ChatToolResult> {
     if (['investigating', 'planning', 'awaiting_approval', 'implementing', 'testing', 'reviewing'].includes(this.agent.snapshot().phase)) {
       return { reply: 'A coding task is already in progress. Finish, reject or cancel it before starting another.', handled: true };
     }
-    const target = extractAbsoluteFilePath(message);
-    if (!target) return { reply: 'Which absolute file path under the approved repository root should I use?', handled: true };
+    const target = this.resolveDirectDestination(message);
+    if (!target) return { reply: 'Which directory and filename under the approved repository root should I use?', handled: true };
     const fenced = /```(?:[A-Za-z0-9_+-]+)?\r?\n([\s\S]*?)\r?\n```/.exec(message);
-    const content = fenced ? `${fenced[1]}\n` : undefined;
-    if (action !== 'delete' && !content) {
-      return { reply: `What exact content should I put in ${target}? Paste it in a fenced code block. I will show the full file and path for approval before writing anything.`, handled: true };
-    }
     try {
+      // Validate the destination and its current state before sending any context to Qwen.
+      const preliminary = planDirectFileAction(target, this.sandbox, action, action === 'delete' ? undefined : 'proposal pending');
+      const previous = preliminary.beforeSha256 ? readDirectFile(target, this.sandbox).content : null;
+      if (!fenced && previous !== null && Buffer.byteLength(previous, 'utf8') > 16_000) {
+        throw new Error('the existing file is too large for a safe whole-file model edit; request a narrower coding patch');
+      }
+      const context: { file: string; content: string }[] = [];
+      if (!fenced && action !== 'delete') {
+        for (const name of ['README.md', 'package.json']) {
+          const candidate = path.join(path.dirname(target), name);
+          if (candidate === target || !existsSync(candidate)) continue;
+          try {
+            const read = readDirectFile(candidate, this.sandbox);
+            if (read.bytes <= 4000) context.push({ file: name, content: read.content });
+          } catch { /* Context is optional; security and read failures do not widen scope. */ }
+        }
+      }
+      const content = action === 'delete' ? undefined : fenced ? `${fenced[1]}\n` : await this.fileProposer(message, target, previous, context, fetch, cancellation);
+      if (previous !== null && content?.trim() === previous.trim()) throw new Error('the proposed content is identical to the existing file');
       const operation = planDirectFileAction(target, this.sandbox, action, content);
+      if (operation.beforeSha256 !== preliminary.beforeSha256) throw new Error('file changed while content was being drafted; request a fresh plan');
       const snapshot = await this.agent.beginTask({
         objective: message.trim(),
         fileOperation: operation,
@@ -429,7 +446,8 @@ export class CodingBridge {
         `- Parent directory: ${operation.createParent ? 'will be created after approval' : 'exists'}`,
         `- Existing file: ${operation.beforeSha256 ? `yes (SHA-256 ${operation.beforeSha256})` : 'no'}`,
         `- Git repository: none will be created`,
-        ...(content ? ['', 'Full proposed content:', `\`\`\`\n${content}\`\`\``] : []),
+        ...(previous ? ['', `Existing content${previous.length > 6000 ? ' (first 6,000 characters)' : ''}:`, `\`\`\`\n${previous.slice(0, 6000)}\n\`\`\``] : []),
+        ...(content ? ['', 'Full proposed content:', `\`\`\`\n${content}\n\`\`\``] : []),
         '',
         'Nothing has been changed. Review this exact operation in Coding and approve or reject it.',
       ];
@@ -437,6 +455,25 @@ export class CodingBridge {
     } catch (error) {
       return { reply: `I could not propose ${action} for ${target}: ${error instanceof Error ? error.message : String(error)}. No file was changed.`, handled: true };
     }
+  }
+
+  private resolveDirectDestination(message: string): string | null {
+    const absolute = extractAbsoluteFilePath(message);
+    if (absolute) return absolute;
+    const named = /\b(?:called|named)\s+["'`]?([A-Za-z][A-Za-z0-9_.-]{0,80}\.[A-Za-z0-9]{1,8})["'`]?/i.exec(message)?.[1];
+    const explicit = /\b([A-Za-z][A-Za-z0-9_.-]{0,80}\.(?:js|jsx|ts|tsx|vue|php|md|json|css|html))\b/i.exec(message)?.[1];
+    const inferred = /\bREADME\b/i.test(message) ? 'README.md'
+      : /\bbackstory\b/i.test(message) && /\bJavaScript\b/i.test(message) ? 'AstraBackstory.js'
+      : /\bsettings\s+panel\b/i.test(message) && /\bVue\b/i.test(message) ? 'SettingsPanel.vue'
+      : /\bprofiles?\b/i.test(message) && /\bLaravel\b/i.test(message) && /\bcontroller\b/i.test(message) ? 'ProfileController.php'
+      : null;
+    const name = named ?? explicit ?? inferred;
+    if (!name) return null;
+    const folder = /\b(?:in|inside|under)\s+(?:the\s+)?([A-Za-z][A-Za-z0-9_.-]{1,80})(?:\s+(?:folder|directory|project|repo|repository))?\b/i.exec(message)?.[1];
+    const base = folder && !['this', 'current', 'project', 'repo', 'repository'].includes(folder.toLowerCase())
+      ? path.join(this.sandbox.root, folder)
+      : this.agent.getRepository();
+    return base ? path.join(base, name) : null;
   }
 
   // --------------------------------------------------------------- helpers

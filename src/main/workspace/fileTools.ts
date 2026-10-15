@@ -26,6 +26,8 @@ export interface DirectFilePlan {
   readonly action: DirectFileAction;
   readonly target: string;
   readonly content?: string;
+  /** Hash of the exact approved UTF-8 bytes for create/write/edit. */
+  readonly expectedSha256?: string;
   /** Hash of the exact bytes at planning time; null means the file was absent. */
   readonly beforeSha256: string | null;
   readonly createParent: boolean;
@@ -85,7 +87,7 @@ export function planDirectFileAction(candidate: string, sandbox: SandboxOptions,
   const beforeSha256 = present ? digest(readDirectBytes(target)) : null;
   const parent = path.dirname(target);
   if (existsSync(parent) && !statSync(parent).isDirectory()) throw new FileToolError('parent path is not a directory');
-  return { action, target, ...(action === 'delete' ? {} : { content }), beforeSha256, createParent: !existsSync(parent) };
+  return { action, target, ...(action === 'delete' ? {} : { content, expectedSha256: digest(Buffer.from(content!, 'utf8')) }), beforeSha256, createParent: !existsSync(parent) };
 }
 
 /** Execute exactly the approved operation, then independently read the result. */
@@ -116,7 +118,9 @@ export function executeDirectFileAction(plan: DirectFilePlan, sandbox: SandboxOp
   catch (error) { fileFailure(error, 'write'); }
   const observed = readDirectBytes(target);
   const expected = Buffer.from(plan.content, 'utf8');
-  if (!observed.equals(expected)) throw new FileToolError('write verification failed: on-disk content differs');
+  if (observed.length !== expected.length || !observed.equals(expected) || digest(observed) !== plan.expectedSha256) {
+    throw new FileToolError(`write verification failed: observed ${observed.length} bytes, SHA-256 ${digest(observed)}; the file may remain on disk and needs review`);
+  }
   return { action: plan.action, target, bytes: observed.length, sha256: digest(observed) };
 }
 

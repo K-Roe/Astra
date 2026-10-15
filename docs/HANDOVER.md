@@ -1,5 +1,9 @@
 # Handover for the next AI agent
 
+## CA-01B natural-language file authoring (2026-10-15; native delete acceptance pending)
+
+The reviewed CA-01 direct-file baseline is local commit `f09fa32`. CA-01B routes natural-language file requests to `proposeFileContent` in `codingModel.ts`, then binds the returned content to the existing direct-file CA-01 plan. Lint is clean and `npm test` passes 313/313. The native harness `scripts/acceptance-ca01b.mjs` opens a visible disposable Electron session and waits for Karl's own decisions; it has no programmatic approval click. Karl already approved a generated create and a generated edit in the real app (screenshots in ignored `test-results/ca01b/`), but the harness stopped at the first delete proposal, so delete rejection, stale-delete refusal and the final approved delete remain unrun. Do not substitute a scripted click for the required human approval, claim native delete acceptance from a pending plan, or describe CA-01B as complete until that sequence runs. Keep the earlier real `astraBlog/AstraBackstory.js` intact. No push.
+
 ## Direct file correction (2026-10-15)
 
 Normal chat now routes direct file requests through `CodingBridge` and the existing CA-01 plan and approval engine. `DirectFilePlan` binds action, absolute target, full new content and prior hash; `executeFileOperation` verifies the result before chat confirms success. The generic Coding `writes` argument is blocked because it did not bind content to the approved plan. The exact `astraBlog/AstraBackstory.js` native acceptance passed and left Karl's file in place; do not rerun the creation harness against that occupied target or remove the file. Its screenshots and JSON are under ignored `test-results/direct-file/`. Keep direct actions inside the configured repository root, and require a fresh approval for every mutation. No Git repo was made for this file and no push was made.

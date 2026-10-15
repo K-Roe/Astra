@@ -283,7 +283,7 @@ export class ChatService {
       const falseMemoryClaim = containsFalseMemoryAction(supportedAnswer);
       const falseFileClaim = containsFalseFileAction(supportedAnswer);
       const answer = falseFileClaim
-        ? 'I have not created, edited or deleted a file in this reply. Please give me an absolute path under the approved root and exact content in a fenced code block so I can propose a file operation for your approval.'
+        ? 'I have not created, edited or deleted a file in this reply. Tell me the intended file and what it should contain, and I can draft a proposal for your approval.'
         : falseMemoryClaim
         ? 'I have not saved, updated or forgotten a personal memory in this reply. Ask me directly to remember, update or forget something if you want to change stored memory.'
         : cited.length > 0 ? `${supportedAnswer}\n\nSources:\n${cited.join('\n')}` : supportedAnswer;
