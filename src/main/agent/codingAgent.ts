@@ -121,6 +121,8 @@ export class CodingAgent extends EventEmitter {
   private error: string | null = null;
   private interrupted = false;
   private cancellationPending = false;
+  /** Task ids Karl rejected or cancelled. Their authority is permanently revoked. */
+  private revokedTasks = new Set<number>();
   private recoveredWork = false;
   private readonly events: ToolEvent[] = [];
   private eventSeq = 0;
@@ -314,6 +316,7 @@ export class CodingAgent extends EventEmitter {
    */
   approve(): TaskSnapshot {
     if (!this.plan || !this.taskId) throw new Error('there is no plan awaiting approval');
+    if (this.revokedTasks.has(this.taskId)) throw new PermissionError('this task was cancelled or rejected; a rejected operation can never be approved');
     if (this.tasks.get(this.taskId)?.state !== 'awaiting_approval' || this.interrupted) throw new PermissionError('task is not awaiting a fresh approval');
     const fingerprint = scopeFingerprint(this.plan);
     this.tasks.transition(this.taskId, 'awaiting_approval');
@@ -333,10 +336,19 @@ export class CodingAgent extends EventEmitter {
 
   reject(reason = 'Karl declined the plan'): TaskSnapshot {
     if (!this.taskId || this.tasks.get(this.taskId)?.state !== 'awaiting_approval') throw new PermissionError('no plan is awaiting rejection');
-    this.tasks.cancel(this.taskId, reason);
+    const rejected = this.taskId;
+    this.tasks.cancel(rejected, `rejected: ${reason}`);
+    // A rejection permanently revokes any authority this task ever held. Without
+    // this, a later approve/execute on a stale fingerprint could still act.
+    this.revokedTasks.add(rejected);
+    this.approvedFingerprint = null;
+    this.approvalRequested = true;
+    this.cancellationPending = true;
+    this.error = `Plan rejected by Karl: ${reason}. Nothing was changed and no command was run.`;
     this.phase = 'cancelled';
     this.emitEvent('approval.rejected', `Plan rejected: ${reason}. Nothing was changed and no command was run.`, true);
-    this.approvals.record({ actor: 'karl', action: 'coding.plan.reject', target: `task:${this.taskId ?? 'none'}`, detail: { reason } });
+    this.approvals.record({ actor: 'karl', action: 'coding.plan.reject', target: `task:${rejected}`, detail: { reason } });
+    this.cancellationPending = false;
     return this.snapshot();
   }
 
@@ -605,12 +617,16 @@ export class CodingAgent extends EventEmitter {
     return this.snapshot();
   }
 
-  /** Finish the task and record a reusable technical summary in memory. */
+/** Finish the task and record a reusable technical summary in memory. */
   async complete(summary?: string): Promise<TaskSnapshot> {
+    // A rejected or cancelled task can never be reported as completed work. This
+    // is the one place a rejection could otherwise be overwritten by 'completed'.
+    if (this.taskId !== null && this.revokedTasks.has(this.taskId)) throw new PermissionError('this task was cancelled or rejected; it cannot be completed');
+    if (this.phase === 'cancelled') throw new PermissionError('this task was cancelled; it cannot be completed');
     this.assertApproved();
     // The lifecycle requires REVIEW before COMPLETE. When tests just ran, the
     // task is in `testing`, so pass through review rather than skipping it.
-    if (this.repository && this.phase !== 'reviewing' && this.phase !== 'cancelled') {
+    if (this.repository && this.phase !== 'reviewing') {
       await this.review();
     }
     this.phase = 'completed';
@@ -688,6 +704,8 @@ export class CodingAgent extends EventEmitter {
     if (!this.taskId || ['completed', 'failed', 'cancelled'].includes(this.tasks.get(this.taskId)?.state ?? '')) return this.snapshot();
     this.cancellationPending = true;
     this.approvedFingerprint = null;
+    // A cancelled task can never be completed or executed either.
+    this.revokedTasks.add(this.taskId);
     this.interrupted = true;
     if (this.activeCommand) {
       const active = this.activeCommand;
@@ -740,6 +758,9 @@ export class CodingAgent extends EventEmitter {
     this.testResults = task.testResults as TaskSnapshot['testResults'];
     this.plan = (task.plan as unknown as ProposedPlan) ?? null;
     this.recoveredWork = task.requiresConfirm;
+    // A rejected or cancelled task stays revoked across a restart: restoring it
+    // for review must never re-open its authority.
+    if (task.state === 'cancelled') this.revokedTasks.add(task.id);
     this.events.length = 0;
     for (const event of this.tasks.events(task.id, 120)) {
       this.events.push({ id: ++this.eventSeq, at: event.at, taskId: task.id, kind: event.kind, label: event.detail, ok: !/failed|refused|cancelled/.test(event.kind) });
@@ -808,6 +829,7 @@ export class CodingAgent extends EventEmitter {
 
   private assertApproved(): void {
     if (!this.plan) throw new Error('there is no plan');
+    if (this.taskId !== null && this.revokedTasks.has(this.taskId)) throw new PermissionError('this task was cancelled or rejected; it can never be approved or executed');
     if ((!this.repository && !this.plan.newRepository) || (this.repository && this.repository.toLowerCase() !== this.plan.repository.toLowerCase())) {
       throw new PermissionError('selected repository differs from the approved plan');
     }

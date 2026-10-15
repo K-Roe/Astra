@@ -551,10 +551,21 @@ export class IntelligenceService implements IntelligenceBridge {
       }).finally(() => { this.activeCodingRun = null; });
     }
     else if (kind === 'reject') {
-      if (this.activeCodingRun) await agent.cancel(input.reason ?? 'approval withdrawn');
-      else agent.reject(input.reason);
+      // Reject is always recorded as a rejection of the exact pending operation.
+      // If an executor is still running, cancel it first so the in-flight promise
+      // cannot continue, then record the rejection on the same task.
+      if (this.activeCodingRun) {
+        await agent.cancel(input.reason ?? 'approval withdrawn');
+      } else {
+        agent.reject(input.reason);
+      }
     }
-    else if (kind === 'complete') { this.assertNoConcurrentCodingRun(); await agent.complete(input.summary); }
+    else if (kind === 'complete') {
+      this.assertNoConcurrentCodingRun();
+      const phase = agent.snapshot().phase;
+      if (phase === 'cancelled') throw new Error(`the task is ${phase}; a rejected or cancelled operation is never reported as completed work`);
+      await agent.complete(input.summary);
+    }
     else { this.assertNoConcurrentCodingRun(); agent.confirmResume(); }
     return this.codingView();
   }

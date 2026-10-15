@@ -567,6 +567,79 @@ test('chat file create, read, edit and delete share CA-01 approval and verified 
   } finally { cleanup(); }
 });
 
+test('a rejected deletion is final: no execution, no completion, file untouched', async () => {
+  const { agent, root, sandbox, cleanup } = lab();
+  const target = path.join(root, 'plain-folder', 'Doomed.js');
+  const content = 'export const value = 1;\n';
+  try {
+    const bridge = new CodingBridge(agent, sandbox);
+    await bridge.handle(`Create file ${target} with this content:\n\`\`\`js\n${content.trimEnd()}\n\`\`\``);
+    agent.approve();
+    agent.executeFileOperation();
+    await agent.review();
+    await agent.complete();
+
+    const deleteTaskId = (await bridge.handle(`Delete file ${target}`)).snapshot?.taskId;
+    assert.equal(agent.snapshot().phase, 'awaiting_approval');
+    const rejected = agent.reject('Karl declined deletion');
+    assert.equal(rejected.phase, 'cancelled');
+    assert.equal(rejected.approval.approved, false, 'a rejection left approval authority behind');
+    assert.match(rejected.error ?? '', /rejected/i);
+    assert.equal(rejected.events.some((event) => event.kind === 'approval.rejected'), true);
+    // Nothing may execute, complete or be re-approved after a rejection.
+    assert.throws(() => agent.executeFileOperation(), /rejected/);
+    await assert.rejects(() => agent.complete('pretending it worked'), /rejected|cancelled/);
+    assert.throws(() => agent.approve(), /rejected|awaiting a fresh approval/);
+    assert.equal(agent.snapshot().phase, 'cancelled');
+    assert.equal(existsSync(target), true);
+    assert.equal(readFileSync(target, 'utf8'), content);
+    assert.notEqual(deleteTaskId, null);
+
+    // A fresh request is still possible and behaves normally.
+    await bridge.handle(`Delete file ${target}`);
+    assert.equal(agent.snapshot().phase, 'awaiting_approval');
+    agent.approve();
+    agent.executeFileOperation();
+    await agent.review();
+    await agent.complete();
+    assert.equal(existsSync(target), false);
+  } finally { cleanup(); }
+});
+
+test('a cancelled task can never be reported as completed work', async () => {
+  const { agent, repo, cleanup } = selectedLab();
+  try {
+    await agent.beginTask(plan());
+    agent.approve();
+    await agent.cancel('Karl withdrew approval');
+    assert.equal(agent.snapshot().phase, 'cancelled');
+    await assert.rejects(() => agent.complete('completed from the workspace'), /cancelled/);
+    assert.equal(agent.snapshot().phase, 'cancelled');
+    assert.equal(readFileSync(path.join(repo, 'src', 'sum.js'), 'utf8').includes('a - b'), true);
+  } finally { cleanup(); }
+});
+
+test('a rejected task stays rejected after a restart', async () => {
+  const { agent, root, sandbox, cleanup } = lab();
+  const target = path.join(root, 'plain-folder', 'Kept.js');
+  const content = 'export const value = 1;\n';
+  try {
+    const bridge = new CodingBridge(agent, sandbox);
+    await bridge.handle(`Create file ${target} with this content:\n\`\`\`js\n${content.trimEnd()}\n\`\`\``);
+    agent.approve();
+    agent.executeFileOperation();
+    await agent.review();
+    await agent.complete();
+    const taskId = (await bridge.handle(`Delete file ${target}`)).snapshot?.taskId;
+    agent.reject('Karl declined deletion');
+    await agent.restore(taskId);
+    assert.equal(agent.snapshot().phase, 'cancelled');
+    assert.throws(() => agent.executeFileOperation(), /rejected|not been approved/);
+    await assert.rejects(() => agent.complete(), /rejected|cancelled/);
+    assert.equal(readFileSync(target, 'utf8'), content);
+  } finally { cleanup(); }
+});
+
 test('natural-language JavaScript file is model-authored then bound to approval', async () => {
   const { agent, root, sandbox, cleanup } = lab();
   const target = path.join(root, 'astraBlog', 'AstraBackstory.js');

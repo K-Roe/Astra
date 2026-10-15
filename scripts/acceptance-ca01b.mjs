@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -90,17 +90,39 @@ async function operatorContinue(label) {
   console.log(`PAUSED FOR REVIEW: ${label}. Send a newline to this harness to continue.`);
   await new Promise((resolve) => { process.stdin.resume(); process.stdin.once('data', resolve); });
 }
-async function decision(page, expected) {
-  const state = await waitFor(page, `window.astraIntelligence.codingSnapshot().then(s=>['completed','cancelled','failed'].includes(s.phase)?JSON.stringify(s):null)`, 600000);
+/**
+ * Wait for Karl's decision on one exact operation.
+ *
+ * The wait is bound to the task id observed in the approval panel, so a
+ * different task's terminal state can never be mistaken for this decision.
+ */
+async function decision(page, pending, expected) {
+  const taskId = pending.taskId;
+  assert.equal(typeof taskId, 'number', 'the approval panel did not expose a task id to correlate');
+  const state = await waitFor(
+    page,
+    `window.astraIntelligence.codingSnapshot().then(s=>s.taskId===${taskId}&&['completed','cancelled','failed'].includes(s.phase)?JSON.stringify(s):null)`,
+    600000,
+  );
   const snapshot = JSON.parse(state);
-  assert.equal(snapshot.phase, expected, `Karl's UI decision resulted in ${snapshot.phase}; expected ${expected}`);
+  assert.equal(
+    snapshot.phase,
+    expected,
+    `task #${taskId} ended as ${snapshot.phase}, expected ${expected}; error=${snapshot.error ?? 'none'}; events=${snapshot.events.slice(-6).map((event) => event.kind).join(',')}`,
+  );
   return snapshot;
+}
+
+/** Persist evidence the moment anything is checked, so a failure is diagnosable. */
+function evidence(name, data) {
+  writeFileSync(path.join(output, name), JSON.stringify(data, null, 2));
 }
 
 let child;
 let browser;
 let page;
 let targetId;
+let completedRun = false;
 try {
   const debuggingPort = await port();
   const env = { ...process.env, ASTRA_CA01_PROFILE: profile, ASTRA_ACCEPTANCE_REPOSITORY_ROOT: repositories };
@@ -130,7 +152,7 @@ try {
   assert.equal(existsSync(target), false);
   await screenshot(page, 'generated-create-pending.png');
   console.log(`WAITING FOR KARL: approve generated create in the visible Astra window. Target: ${target}`);
-  const completed = await decision(page, 'completed');
+  const completed = await decision(page, pending, 'completed');
   assert.equal(completed.events.some((event) => event.kind === 'file.verified' && event.ok), true);
   assert.equal(existsSync(target), true);
   assert.equal(readFileSync(target, 'utf8'), content);
@@ -151,7 +173,7 @@ try {
   assert.equal(readFileSync(target, 'utf8'), content);
   await screenshot(page, 'generated-edit-pending.png');
   console.log(`WAITING FOR KARL: approve generated edit in the visible Astra window. Target: ${target}`);
-  await decision(page, 'completed');
+await decision(page, editPending, 'completed');
   assert.equal(readFileSync(target, 'utf8'), editedContent);
   await screenshot(page, 'generated-edit-verified.png');
   await operatorContinue('generated edit verified; inspect evidence before the first delete request');
@@ -160,18 +182,28 @@ try {
   const firstDeleteProposal = await send(page, deleteRequest);
   const firstDelete = JSON.parse(await waitFor(page, "window.astraIntelligence.codingSnapshot().then(s=>s.phase==='awaiting_approval'?JSON.stringify(s):null)"));
   assert.equal(firstDelete.plan?.fileOperation?.target, target);
+  assert.equal(firstDelete.plan?.fileOperation?.action, 'delete');
+  const beforeRejection = readFileSync(target);
   await screenshot(page, 'delete-first-pending.png');
   console.log('WAITING FOR KARL: REJECT the first deletion in the visible Astra window.');
-  await decision(page, 'cancelled');
-  assert.equal(readFileSync(target, 'utf8'), editedContent);
-  await operatorContinue('first deletion rejected; inspect unchanged file before stale deletion');
+  const rejected = await decision(page, firstDelete, 'cancelled');
+  // Independent proof that the rejection did not touch the file.
+  assert.equal(existsSync(target), true, 'the file was deleted even though Karl rejected the deletion');
+  assert.equal(readFileSync(target), beforeRejection, 'the file changed even though Karl rejected the deletion');
+  assert.equal(rejected.events.some((event) => event.kind === 'approval.rejected'), true, 'no rejection was recorded');
+  assert.equal(rejected.events.some((event) => event.kind === 'file.verified'), false, 'a file operation ran despite the rejection');
+  assert.match(rejected.error ?? '', /rejected/i);
+  await screenshot(page, 'delete-first-rejected.png');
+  evidence('delete-rejection.json', { taskId: firstDelete.taskId, target, error: rejected.error, events: rejected.events.map((event) => ({ kind: event.kind, ok: event.ok })), fileExists: existsSync(target), bytes: Buffer.byteLength(beforeRejection), verified: true });
+  await operatorContinue('first deletion rejected; inspect the unchanged file before stale deletion');
 
   await send(page, deleteRequest);
-  await waitFor(page, "window.astraIntelligence.codingSnapshot().then(s=>s.phase==='awaiting_approval')");
+  const stalePending = JSON.parse(await waitFor(page, "window.astraIntelligence.codingSnapshot().then(s=>s.phase==='awaiting_approval'?JSON.stringify(s):null)"));
+  assert.equal(stalePending.plan?.fileOperation?.target, target);
   const externalContent = `${editedContent}\n// changed after planning by acceptance harness\n`;
   writeFileSync(target, externalContent);
   console.log('WAITING FOR KARL: approve the second deletion. It must fail because the disposable file changed after planning.');
-  const stale = await decision(page, 'failed');
+  const stale = await decision(page, stalePending, 'failed');
   assert.match(stale.error ?? '', /changed since planning/);
   assert.equal(readFileSync(target, 'utf8'), externalContent);
   await operatorContinue('stale deletion failed; inspect changed file before final deletion');
@@ -180,11 +212,17 @@ try {
   const finalPending = JSON.parse(await waitFor(page, "window.astraIntelligence.codingSnapshot().then(s=>s.phase==='awaiting_approval'?JSON.stringify(s):null)"));
   assert.equal(finalPending.plan?.fileOperation?.target, target);
   console.log('WAITING FOR KARL: approve the final deletion in the visible Astra window.');
-  const finalCompleted = await decision(page, 'completed');
+  const finalCompleted = await decision(page, finalPending, 'completed');
   assert.equal(existsSync(target), false);
   await screenshot(page, 'delete-verified.png');
-  writeFileSync(path.join(output, 'acceptance.json'), JSON.stringify({ request, proposal, completionReply, readback, editRequest, editProposal, firstDeleteProposal, finalDeleteProposal, target, generatedBytes: Buffer.byteLength(content), editedBytes: Buffer.byteLength(editedContent), staleError: stale.error, finalEvents: finalCompleted.events.map((event) => ({ kind: event.kind, ok: event.ok })), verified: true }, null, 2));
+  evidence('acceptance.json', { request, proposal, completionReply, readback, editRequest, editProposal, firstDeleteProposal, finalDeleteProposal, target, generatedBytes: Buffer.byteLength(content), editedBytes: Buffer.byteLength(editedContent), rejection: { taskId: firstDelete.taskId, error: rejected.error, filePreserved: true }, staleError: stale.error, finalEvents: finalCompleted.events.map((event) => ({ kind: event.kind, ok: event.ok })), verified: true });
   console.log('PASS: real Electron chat generated, approved and verified create/edit; Karl rejected delete, stale delete failed safely, and Karl approved final delete.');
+  completedRun = true;
+} catch (error) {
+  // Keep the disposable root so the failure can be investigated instead of vanishing.
+  console.error(`CA-01B acceptance failed: ${error instanceof Error ? error.message : String(error)}`);
+  evidence('failure.json', { error: String(error), target, disposable, targetExists: existsSync(target), targetBytes: existsSync(target) ? statSync(target).size : null });
+  throw error;
 } finally {
   try { if (browser && targetId) await browser.send('Target.closeTarget', { targetId: targetId.id }); } catch { /* closed */ }
   if (child && child.exitCode === null) {
@@ -193,5 +231,6 @@ try {
   }
   page?.close();
   browser?.close();
-  if (path.resolve(disposable).startsWith(path.resolve(os.tmpdir()) + path.sep)) rmSync(disposable, { recursive: true, force: true });
+  if (completedRun && path.resolve(disposable).startsWith(path.resolve(os.tmpdir()) + path.sep)) rmSync(disposable, { recursive: true, force: true });
+  else console.log(`Disposable acceptance root kept for inspection: ${disposable}`);
 }

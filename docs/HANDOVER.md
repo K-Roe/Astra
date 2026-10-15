@@ -1,5 +1,9 @@
 # Handover for the next AI agent
 
+## CA-01B deletion rejection correction (2026-10-15; native re-run pending)
+
+A rejected or cancelled coding task is now permanently revoked: it can never be approved, executed, reviewed or completed, including after a restart. `scripts/acceptance-ca01b.mjs` correlates each decision with the exact task id, re-reads the file after a rejection, and keeps the disposable root and a `failure.json` when anything fails. Do not re-introduce a completion path that can overwrite `cancelled`, and do not weaken the harness correlation. Karl must re-run `node scripts/acceptance-ca01b.mjs` and make the three delete decisions in the visible window before CA-01B is accepted. No push.
+
 ## CA-01B natural-language file authoring (2026-10-15; native delete acceptance pending)
 
 The reviewed CA-01 direct-file baseline is local commit `f09fa32`. CA-01B routes natural-language file requests to `proposeFileContent` in `codingModel.ts`, then binds the returned content to the existing direct-file CA-01 plan. Lint is clean and `npm test` passes 313/313. The native harness `scripts/acceptance-ca01b.mjs` opens a visible disposable Electron session and waits for Karl's own decisions; it has no programmatic approval click. Karl already approved a generated create and a generated edit in the real app (screenshots in ignored `test-results/ca01b/`), but the harness stopped at the first delete proposal, so delete rejection, stale-delete refusal and the final approved delete remain unrun. Do not substitute a scripted click for the required human approval, claim native delete acceptance from a pending plan, or describe CA-01B as complete until that sequence runs. Keep the earlier real `astraBlog/AstraBackstory.js` intact. No push.
