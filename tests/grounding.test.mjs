@@ -24,7 +24,7 @@ test('with nothing stored, the model is told to admit ignorance', () => {
     const context = buildGrounding('how do I revoke a source?', knowledge, memory);
     assert.equal(context.hasKnowledge, false);
     assert.equal(referenceBlock(context), 'NO_REFERENCE_MATERIAL');
-    assert.match(groundingInstruction(context), /do not have/i);
+    assert.match(groundingInstruction(context), /No relevant website passage/i);
     assert.match(groundingInstruction(context), /Never invent a citation/);
     assert.deepEqual(citationLines(context), [], 'no citations may be invented');
   } finally {
@@ -92,7 +92,7 @@ test('only citations the model actually used are emitted', () => {
     const source = knowledge.addSource({ url: 'https://docs.example.org/learn', host: 'docs.example.org', label: 'Docs' });
     knowledge.storeDocument({ sourceId: source.id, url: 'https://docs.example.org/learn/a', title: 'A', text: 'Alpha content about caching. '.repeat(40), bytes: 300 });
     knowledge.storeDocument({ sourceId: source.id, url: 'https://docs.example.org/learn/b', title: 'B', text: 'Beta content about routing. '.repeat(40), bytes: 300 });
-    const context = buildGrounding('caching and routing', knowledge, memory);
+    const context = buildGrounding('caching', knowledge, memory);
     assert.ok(context.passages.length >= 1);
 
     // Marker [1] must resolve to whatever document actually sits at index 1,
@@ -178,4 +178,27 @@ test('grounding survives a restart, proving offline capability', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('unrelated React text is excluded from general chat and memory capability queries', () => {
+  const { dir, db, knowledge, memory } = fresh();
+  try {
+    const source = knowledge.addSource({ url: 'https://react.dev/learn', host: 'react.dev' });
+    knowledge.storeDocument({ sourceId: source.id, url: 'https://react.dev/learn', title: 'React Learn', text: 'React components and memory usage in JavaScript. '.repeat(30), bytes: 1000 });
+    assert.equal(buildGrounding('do you have personal memory yet', knowledge, memory).hasKnowledge, false);
+    assert.equal(buildGrounding('Hello, how are you?', knowledge, memory).hasKnowledge, false);
+    assert.equal(buildGrounding('How do React components work?', knowledge, memory).hasKnowledge, true);
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('citation requires a retrieved passage and an answer sentence about its topic', () => {
+  const { dir, db, knowledge, memory } = fresh();
+  try {
+    const source = knowledge.addSource({ url: 'https://react.dev/learn', host: 'react.dev' });
+    knowledge.storeDocument({ sourceId: source.id, url: 'https://react.dev/learn/rendering-lists', title: 'Rendering Lists', text: 'React list items need stable keys so React can track each item. '.repeat(30), bytes: 1000 });
+    const context = buildGrounding('How do I key React list items?', knowledge, memory);
+    assert.equal(context.hasKnowledge, true);
+    assert.match(extractUsedCitations('React list items need stable keys [1].', context)[0], /react\.dev/);
+    assert.deepEqual(extractUsedCitations('Astra has no personal memory [1].', context), []);
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });

@@ -256,7 +256,7 @@ async function waitForAssistantCount(page, expected, timeoutMs = 120000) {
 
 async function inspectLayout(page, compact) {
   const result = await page.send('Runtime.evaluate', {
-    expression: "JSON.stringify({width:innerWidth,height:innerHeight,documentWidth:document.documentElement.scrollWidth,avatar:(()=>{const r=document.querySelector('.avatar-panel').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})(),chat:(()=>{const r=document.querySelector('.conversation-panel').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})(),composer:(()=>{const r=document.querySelector('.composer').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})(),placeholder:document.querySelector('.placeholder-label')?.innerText,idleToggle:!!document.querySelector('.idle-toggle input'),voice:Array.from(document.querySelectorAll('.voice-reserved button')).map(b=>({text:b.innerText,disabled:b.disabled,bottom:b.getBoundingClientRect().bottom})),presentation:document.querySelector('.avatar-panel')?.dataset.presentationState})",
+    expression: "JSON.stringify({width:innerWidth,height:innerHeight,documentWidth:document.documentElement.scrollWidth,avatar:(()=>{const r=document.querySelector('.avatar-panel').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})(),chat:(()=>{const r=document.querySelector('.conversation-panel').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})(),composer:(()=>{const r=document.querySelector('.composer').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})(),placeholder:document.querySelector('.placeholder-label')?.innerText,character:document.querySelector('.character-version-select select')?.value,idleToggle:!!document.querySelector('.idle-toggle input'),voice:Array.from(document.querySelectorAll('.voice-reserved button')).map(b=>({text:b.innerText,disabled:b.disabled,bottom:b.getBoundingClientRect().bottom})),presentation:document.querySelector('.avatar-panel')?.dataset.presentationState})",
     returnByValue: true,
   });
   const layout = JSON.parse(result.result.value);
@@ -264,7 +264,7 @@ async function inspectLayout(page, compact) {
   assert(layout.avatar.width > 100 && layout.avatar.height > 100, 'Avatar panel collapsed');
   assert(layout.chat.width > 250 && layout.chat.height > 200, 'Conversation panel collapsed');
   assert(layout.composer.y + layout.composer.height <= layout.height + 1, 'Composer is clipped');
-  assert.match(layout.placeholder, /V1 approved model active/i);
+  assert.match(layout.placeholder, layout.character === 'astra-character-v2' ? /V2 preview active.*awaiting Karl/i : /V1 approved model active/i);
   assert.equal(layout.idleToggle, true, 'Idle activities control is missing');
   assert.deepEqual(layout.voice.map(({ text, disabled }) => ({ text, disabled })), [{ text: 'Mic unavailable', disabled: true }, { text: 'Audio unavailable', disabled: true }]);
   assert(layout.voice.every((button) => button.bottom <= layout.height + 1), 'Reserved voice controls are clipped');
@@ -446,13 +446,23 @@ async function main() {
     const memoriesBefore = await page.send('Runtime.evaluate', {
       expression: 'window.astraIntelligence.memorySummary().then(s=>s.count)', awaitPromise: true, returnByValue: true,
     });
-    await sendUiMessage(page, 'Will you remember this test word after I close Astra?');
+    await sendUiMessage(page, 'do you have personal memory yet');
     const personalityAnswers = await waitForAssistantCount(page, 3);
-    assert.match(personalityAnswers[2], /(?:remember|memory|forget)/i, 'Astra did not explain how personal memory works');
+    assert.match(personalityAnswers[2], /^Yes\. I can remember information you ask me to save, even after restarting\./i, 'Astra did not report the available memory capability');
+    assert.match(personalityAnswers[2], /conversation history is temporary/i);
+    assert.doesNotMatch(personalityAnswers[2], /react\.dev|Sources:|\[1\]/i, 'an unrelated research citation appeared in the capability answer');
+    resizeWindow(handle, 1100, 850);
+    await delay(300);
+    await page.send('Runtime.evaluate', { expression: "document.querySelector('.conversation').scrollTop = document.querySelector('.conversation').scrollHeight" });
+    await delay(200);
+    await capture(page, 'astra-memory-capability-native.png');
+    resizeWindow(handle, 960, 640);
+    await delay(300);
     const memoriesAfter = await page.send('Runtime.evaluate', {
       expression: 'window.astraIntelligence.memorySummary().then(s=>s.count)', awaitPromise: true, returnByValue: true,
     });
     assert.equal(memoriesAfter.result.value, memoriesBefore.result.value, 'asking a question about memory must not store a memory');
+    await writeFile(path.join(evidenceDir, 'astra-memory-capability-native.json'), JSON.stringify({ question: 'do you have personal memory yet', answer: personalityAnswers[2], savedCountBefore: memoriesBefore.result.value, savedCountAfter: memoriesAfter.result.value }, null, 2));
     await page.send('Runtime.evaluate', { expression: "document.querySelector('.conversation').scrollTop = 0" });
     await delay(150);
     const jumpBefore = await page.send('Runtime.evaluate', { expression: "Boolean(document.querySelector('.jump-latest'))", returnByValue: true });

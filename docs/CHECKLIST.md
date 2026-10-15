@@ -1,5 +1,13 @@
 ﻿# Project ASTRA checklist
 
+## Personal memory chat grounding correction (2026-10-15)
+
+- [x] Exact capability question with memory available, unavailable and zero saved records uses the trusted service before research or Gemma. Focused tests and native Electron/Gemma pass; real profile retained three records.
+- [x] Chat recall, save, update and forget reflect SQLite rows after application restarts. Disposable native run passed 36/36 with active-row/count checks.
+- [x] Unrelated React passages and hostile claims do not ground Astra's capability; ordinary chat has no irrelevant citation. Relevant React keys answer cites the actual stored page. Focused grounding tests and native run pass.
+- [x] Obsolete personality instruction corrected; normal Gemma prompts carry runtime capability state. Generated save confirmations are suppressed and do not write memory. Full `npm test` 292/292 and lint pass.
+- [ ] Lexical relevance and generated-claim checks are bounded heuristics; exhaustive semantic citation support and every possible generated paraphrase are not verified. LW-03 V2 visual approval remains separate.
+
 ## LW-03 UI and world correction — validated locally, LW-03 still PARTIAL (2026-10-15)
 
 - [x] Conversation history and persistent personal memory labelled separately; availability and active count come from a successful memory-service summary read. Native real-profile desktop check found 3 existing records visible in Learning, matching Chat; memory-persistence questions now receive deterministic answers without writes.

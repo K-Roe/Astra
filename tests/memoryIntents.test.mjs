@@ -29,6 +29,12 @@ test('questions about Astra memory persistence never become save requests', () =
   assert.equal(detectMemoryIntent('Can you remember my cat?'), null);
 });
 
+test('direct personal-memory capability questions are classified before retrieval', () => {
+  for (const question of ['do you have personal memory yet', 'Do you have personal memory?', 'Can you use persistent memory?', 'Is your personal memory available?']) {
+    assert.equal(detectMemoryIntent(question)?.kind, 'explain_persistence', question);
+  }
+});
+
 test('updates and corrections are distinguished from new memories', () => {
   const updated = detectMemoryIntent('update my frontend stack to React with plain JavaScript');
   assert.equal(updated.kind, 'update');

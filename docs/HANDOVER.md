@@ -1,5 +1,9 @@
 # Handover for the next AI agent
 
+## Personal memory chat grounding correction (2026-10-15)
+
+Read the new top section of `docs/CURRENT_STATE.md`. The exact capability question is handled in `ChatService` before research/Gemma from `MemoryChatPort.summary()`; the same status is included in ordinary chat prompts. `buildGrounding` filters weak FTS5 OR results, and citation extraction checks the answer sentence against the selected passage. `docs/ASTRA_PERSONALITY.md` no longer says a fresh profile lacks the capability. Generated save/update/forget claims are guarded, while actual writes still require the trusted memory command path. Native acceptance uses V2 but does not approve it as a new default. Keep the existing database, bridge, coding controls and home intact. Verify Git status before further work and do not push automatically.
+
 ## LW-03 correction handover (2026-10-15; PARTIAL)
 
 This correction follows `9f29aa8`; inspect the current Git status before further work. `ChatStatus.memoryAvailable` is derived from a successful personal-memory summary read, while chat turns remain in process memory. `AvatarPanel` keeps the active V1/V2 id in local renderer storage only after an explicit selection and forbids changes during real coding/learning work. A fresh profile still selects V1. `HOME_ROOM.desk_front` is now left of the chair, the visible chair back is behind Astra, and `desk_seat.facing = 0` points to the monitor. `homeCamera.ts` provides the default companion frame and selectable inspection views through the one capped viewport.

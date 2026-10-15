@@ -40,7 +40,7 @@ test('approved local model applies personality, keeps chat history in the sessio
   assert.match(fake.chats[0].messages[0].content, /Be calm and honest/);
   // With no knowledge retrieved, the prompt must tell it to admit ignorance,
   // and it must not claim any persistent personal memory.
-  assert.match(fake.chats[0].messages[0].content, /do not have/i);
+  assert.match(fake.chats[0].messages[0].content, /personal memory is unavailable/i);
   assert.equal(fake.chats[0].options.num_ctx, 4096);
   assert.equal(fake.chats[0].model, 'gemma3:4b');
   service.clearConversation();

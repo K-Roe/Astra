@@ -66,7 +66,9 @@ export function detectMemoryIntent(raw: string): MemoryIntent | null {
   // service, never from an unrelated retrieved website or a generated claim.
   if (/^(?:will|would)\s+you\s+remember\b/i.test(text)
     || (/^(?:can|could)\s+you\s+remember\b/i.test(text) && /\b(?:after|across|when)\b.*\b(?:close|restart|reopen|quit|exit|session)\b/i.test(text))
-    || /^how\s+(?:does|do|is)\s+(?:your|personal)\s+memory\b/i.test(text)) {
+    || /^how\s+(?:does|do|is)\s+(?:your|personal)\s+memory\b/i.test(text)
+    || /^(?:do|does|did|will|would|can|could|have|has)\s+you\s+(?:have|got|use|support)\s+(?:any\s+)?(?:personal|persistent|long.term)\s+memor(?:y|ies)\b/i.test(text)
+    || /^(?:is|are)\s+(?:your\s+)?(?:personal|persistent|long.term)\s+memor(?:y|ies)\s+(?:available|enabled|working|persistent)\b/i.test(text)) {
     return { kind: 'explain_persistence', text };
   }
 

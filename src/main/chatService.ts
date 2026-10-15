@@ -2,12 +2,14 @@ import type { ChatMessage, ChatStatus } from '../shared/contracts';
 import {
   extractUsedCitations,
   groundingInstruction,
+  relevantGrounding,
   referenceBlock,
   type GroundingContext,
 } from './knowledge/grounding';
 import type { CodingBridge } from './agent/codingBridge';
 import type { MemoryCommandResult } from './memory/memoryCommands';
 import type { PersonalMemorySummary } from './memory/personalMemory';
+import { detectMemoryIntent } from './memory/memoryIntents';
 
 /**
  * The slice of personal memory the chat layer is allowed to use.
@@ -158,6 +160,25 @@ export class ChatService {
     }
     const text = content.trim();
 
+    // Capability is application state, never a fact inferred by Gemma or a
+    // retrieved website. This also works when the memory port is unavailable.
+    if (detectMemoryIntent(text)?.kind === 'explain_persistence') {
+      let available = false;
+      let count = 0;
+      try {
+        if (this.memory) {
+          count = this.memory.summary().count;
+          available = true;
+        }
+      } catch { /* Report the failed service read as unavailable. */ }
+      const reply = available
+        ? `Yes. I can remember information you ask me to save, even after restarting. Our current conversation history is temporary. You have ${count} saved personal memor${count === 1 ? 'y' : 'ies'}. Asking this question did not save anything.`
+        : 'Personal memory is currently unavailable. Our current conversation history is temporary, and I cannot confirm a saved memory until the memory service is available. Asking this question did not save anything.';
+      this.history.push({ role: 'user', content: text }, { role: 'assistant', content: reply });
+      this.detail = available ? 'Explained personal memory from the local service. Nothing saved.' : 'Personal memory service unavailable. Nothing saved.';
+      return this.snapshot('ready');
+    }
+
     // Personal memory is handled before anything else, and by a trusted
     // service rather than the model. Only text Karl typed can reach it.
     if (this.memory) {
@@ -205,17 +226,22 @@ export class ChatService {
       await this.verifyModel(signal);
       // Retrieval happens before generation so the answer can be grounded in
       // stored sources, and so a question with no stored answer can say so.
-      const grounding = this.grounder
+      const grounding = relevantGrounding(text, this.grounder
         ? this.grounder(text)
-        : { passages: [], memories: [], hasKnowledge: false, stalePassages: 0 };
+        : { passages: [], memories: [], hasKnowledge: false, stalePassages: 0 });
       const reference = referenceBlock(grounding);
       const guidance = groundingInstruction(grounding);
       // Personal memory is injected separately from researched knowledge so the
       // model can never present a website passage as something Karl said.
       const memoryBlock = this.memory ? memoryPromptBlock(this.memory, text) : '';
+      const memoryStatus = this.snapshot('ready');
+      const capability = memoryStatus.memoryAvailable
+        ? `Runtime capability: persistent personal memory is available, with ${memoryStatus.memoryCount} saved record(s). Conversation history is temporary. A memory exists only after the trusted service confirms a write. Never claim to have saved, changed or forgotten a memory in a generated reply.`
+        : 'Runtime capability: persistent personal memory is unavailable. Conversation history is temporary. Never claim to have saved, changed or forgotten a memory in a generated reply.';
 
       const systemPrompt = [
         `You are Astra, a local-first desktop companion. Follow this authored personality specification:\n\n${this.personality}`,
+        capability,
         reference === 'NO_REFERENCE_MATERIAL'
           ? 'You have no stored reference material for this question.'
           : `Reference material follows.\n\n${reference}`,
@@ -246,11 +272,16 @@ export class ChatService {
 
       // Citations are appended from real stored sources only, and only the
       // markers the model actually used are kept.
-      const answer = grounding.hasKnowledge && /\[\d+\]/.test(raw)
-        ? `${raw}\n\nSources:\n${extractUsedCitations(raw, grounding).join('\n')}`
-        : raw;
+      const cited = extractUsedCitations(raw, grounding);
+      const supportedAnswer = raw.replace(/\s*\[(\d{1,2})\]/g, (marker, number: string) => cited.some((line) => line.startsWith(`[${number}]`)) ? marker : '').trim();
+      const falseMemoryClaim = containsFalseMemoryAction(supportedAnswer);
+      const answer = falseMemoryClaim
+        ? 'I have not saved, updated or forgotten a personal memory in this reply. Ask me directly to remember, update or forget something if you want to change stored memory.'
+        : cited.length > 0 ? `${supportedAnswer}\n\nSources:\n${cited.join('\n')}` : supportedAnswer;
       this.history.push({ role: 'user', content: text }, { role: 'assistant', content: answer });
-      this.detail = grounding.hasKnowledge
+      this.detail = falseMemoryClaim
+        ? 'No personal memory was changed.'
+        : grounding.hasKnowledge
         ? `Answered from ${grounding.passages.length} stored source passage(s).`
         : this.memory?.summary().count
           ? `Local model answered with ${this.memory.summary().count} stored personal memories in context.`
@@ -337,4 +368,11 @@ function describeMemoryAction(action: MemoryCommandResult['action']): string {
     default:
       return 'Local model ready.';
   }
+}
+
+/** Generated text is never evidence that a database mutation succeeded. */
+function containsFalseMemoryAction(answer: string): boolean {
+  return /\b(?:i(?:'ve| have)?|astra has)\s+(?:now\s+)?(?:saved|stored|updated|changed|forgotten|deleted|removed)\s+(?:that|this|your|my|it|a\s+(?:personal\s+)?memory)\b/i.test(answer)
+    || /\b(?:saved|stored|updated|forgotten|deleted)\s+(?:to|from|in)\s+(?:my|your|personal)\s+memory\b/i.test(answer)
+    || /\bi\s*(?:will|'ll)\s+(?:remember|save|store)\s+(?:that|this|it|your|my)\b/i.test(answer);
 }

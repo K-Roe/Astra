@@ -1,5 +1,9 @@
 # Project ASTRA decisions
 
+## ADR-032 — Runtime memory authority and bounded citation relevance (Implemented, 2026-10-15)
+
+Astra's own memory capability is answered from a successful read of the trusted personal-memory service before model or research routing; availability is never inferred from an empty record list or a website. Ordinary prompts include the same runtime capability and prohibit generated mutation claims. Knowledge FTS5 remains a recall mechanism, but topic overlap is required before passages are injected, and citation markers are retained only when the answer sentence overlaps the selected passage. This is deliberately a bounded lexical guard, not a claim of semantic proof. The existing SQLite memory database and command authority remain unchanged.
+
 ## ADR-031 — Correct LW-03 presentation without changing approval or memory authority (Implemented, 2026-10-15)
 
 Show chat history as temporary and personal memory as available only after the main-process memory service answers a summary read. A question about Astra's own memory persistence is answered deterministically by `MemoryCommands` using that service, before unrelated research or Gemma can misstate a save. Keep a fresh profile on approved V1; store an explicit V2 preview selection as a local renderer preference, and forbid rig changes during active coding or learning. Route the desk chair from its open side and seat the existing rig facing the monitor. Use a closer default camera for the main activity area, with the full home and inspection views still selectable. This makes the current home easier to inspect without changing the rig, adding a second renderer or granting new authority. V2 still needs Karl's visual approval.

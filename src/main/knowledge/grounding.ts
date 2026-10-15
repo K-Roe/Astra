@@ -24,15 +24,29 @@ export interface GroundingContext {
   readonly stalePassages: number;
 }
 
+const QUERY_STOP = new Set(['about', 'after', 'again', 'also', 'and', 'are', 'can', 'could', 'does', 'for', 'from', 'have', 'how', 'into', 'just', 'know', 'me', 'my', 'please', 'tell', 'that', 'the', 'their', 'them', 'there', 'this', 'what', 'when', 'where', 'which', 'who', 'why', 'will', 'with', 'would', 'you', 'your', 'yet']);
+const terms = (text: string): string[] => [...new Set((text.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((word) => word.length > 2 && !QUERY_STOP.has(word)).map((word) => (word.endsWith('s') && word.length > 3 ? word.slice(0, -1) : word).slice(0, 4)))];
+
+/** FTS is recall-oriented; require topic overlap before a passage reaches Gemma. */
+export function relevantGrounding(query: string, context: GroundingContext): GroundingContext {
+  const queryTerms = terms(query);
+  const required = queryTerms.length > 1 ? 2 : 1;
+  const passages = queryTerms.length === 0 ? [] : context.passages.filter((passage) => {
+    const passageTerms = new Set(terms(`${passage.documentTitle} ${passage.text}`));
+    return queryTerms.filter((term) => passageTerms.has(term)).length >= required;
+  });
+  return { ...context, passages, hasKnowledge: passages.length > 0, stalePassages: passages.filter((passage) => passage.stale).length };
+}
+
 export function buildGrounding(query: string, knowledge: KnowledgeStore, memory: MemoryStore): GroundingContext {
   const passages = knowledge.search(query, 5);
   const memories = memory.relevant(query, 5);
-  return {
+  return relevantGrounding(query, {
     passages,
     memories,
     hasKnowledge: passages.length > 0,
     stalePassages: passages.filter((p) => p.stale).length,
-  };
+  });
 }
 
 /** Reference block injected into the model prompt. */
@@ -82,9 +96,9 @@ export function referenceBlock(context: GroundingContext): string {
 export function groundingInstruction(context: GroundingContext): string {
   if (!context.hasKnowledge) {
     return (
-      'You have no retrieved reference material for this question. Say plainly that you do not have ' +
-      'information about it in your local knowledge base, and offer to learn from an approved website ' +
-      'if Karl wants. Never invent a citation or a source.'
+      'No relevant website passage was retrieved. Answer ordinary conversation normally; for factual questions, ' +
+      'be clear when the answer comes from general model knowledge rather than Karl\'s saved sources. ' +
+      'Never invent a citation or a source.'
     );
   }
   const stale = context.stalePassages > 0;
@@ -111,5 +125,9 @@ export function extractUsedCitations(answer: string, context: GroundingContext):
     const index = Number(match[1]);
     if (index >= 1 && index <= context.passages.length) used.add(index);
   }
-  return [...used].sort((a, b) => a - b).map((index) => `[${index}] ${context.passages[index - 1].documentUrl}`);
+  return [...used].sort((a, b) => a - b).filter((index) => {
+    const sentence = answer.split(/(?<=[.!?])\s+/).find((part) => part.includes(`[${index}]`)) ?? '';
+    const sourceTerms = new Set(terms(`${context.passages[index - 1].documentTitle} ${context.passages[index - 1].text}`));
+    return terms(sentence).some((term) => sourceTerms.has(term));
+  }).map((index) => `[${index}] ${context.passages[index - 1].documentUrl}`);
 }

@@ -134,7 +134,7 @@ test('persistence questions use the real memory service and save nothing', async
     const { fetchImpl, prompts } = fakeOllama('I already saved the word.');
     const chat = new ChatService('personality', fetchImpl, undefined, undefined, memory.port);
     const answer = await chat.send('Will you remember this test word after I close Astra?');
-    assert.match(answer.messages.at(-1).content, /conversation is temporary/i);
+    assert.match(answer.messages.at(-1).content, /conversation history is temporary/i);
     assert.match(answer.messages.at(-1).content, /did not save anything/i);
     assert.equal(answer.memoryCount, 0);
     assert.equal(prompts.length, 0);
@@ -197,9 +197,64 @@ test('a failed memory-service read is shown as unavailable', async () => {
     const status = await chat.getStatus();
     assert.equal(status.memoryAvailable, false);
     assert.equal(status.memoryCount, 0);
+    const answer = await chat.send('do you have personal memory yet');
+    assert.match(answer.messages.at(-1).content, /currently unavailable/i);
+    assert.doesNotMatch(answer.messages.at(-1).content, /Yes\. I can remember/i);
   } finally {
     memory.close();
   }
+});
+
+test('exact capability question uses service state with zero or saved memories and no website citation', async () => {
+  const memory = fresh();
+  try {
+    const { fetchImpl, prompts } = fakeOllama('I do not have personal memory yet. [1]');
+    const grounder = () => { throw new Error('knowledge retrieval must not run for capability'); };
+    const chat = new ChatService('personality', fetchImpl, grounder, undefined, memory.port);
+    const zero = await chat.send('do you have personal memory yet');
+    assert.match(zero.messages.at(-1).content, /^Yes\. I can remember information you ask me to save, even after restarting/);
+    assert.match(zero.messages.at(-1).content, /0 saved personal memories/);
+    assert.doesNotMatch(zero.messages.at(-1).content, /\[1\]|react\.dev/i);
+    await chat.send('remember that I prefer fountain pens');
+    const saved = await chat.send('Do you have personal memory?');
+    assert.match(saved.messages.at(-1).content, /1 saved personal memory/);
+    assert.equal(prompts.length, 0);
+  } finally { memory.close(); }
+});
+
+test('memory recall survives a database restart, then update and forget change the actual rows', async () => {
+  const memory = fresh();
+  try {
+    const { fetchImpl, prompts } = fakeOllama('invented');
+    const first = new ChatService('personality', fetchImpl, undefined, undefined, memory.port);
+    await first.send('remember that I prefer fountain pens');
+    first.shutdown();
+    memory.db.close();
+    const db = new AstraDatabase(path.join(memory.dir, 'astra.db'));
+    const personal = new PersonalMemoryService(db, new MemoryStore(db));
+    const port = { ...memory.port, handle: (text) => new MemoryCommands(personal).handle(text, { conversationRef: 'restart-test', suggestionsEnabled: false }), summary: () => personal.summary(), contextFor: (query) => { const block = personal.contextBlock(query); return { relevant: block.relevant, summary: block.summary }; } };
+    try {
+      const second = new ChatService('personality', fetchImpl, undefined, undefined, port);
+      assert.match((await second.send('what do you remember about pens?')).messages.at(-1).content, /fountain pens/);
+      await second.send('update my pens to I prefer rollerball pens');
+      assert.match((await second.send('what do you remember about pens?')).messages.at(-1).content, /rollerball pens/);
+      await second.send('forget my pens');
+      assert.equal(personal.summary().count, 0);
+      assert.doesNotMatch((await second.send('what do you remember about pens?')).messages.at(-1).content, /rollerball pens/);
+      assert.equal(prompts.length, 0);
+    } finally { db.close(); }
+  } finally { memory.close(); }
+});
+
+test('model-generated save confirmation is suppressed and does not write a row', async () => {
+  const memory = fresh();
+  try {
+    const { fetchImpl } = fakeOllama('I have saved that to your personal memory.');
+    const chat = new ChatService('personality', fetchImpl, undefined, undefined, memory.port);
+    const status = await chat.send('Please quote a sample confirmation sentence.');
+    assert.match(status.messages.at(-1).content, /I have not saved/i);
+    assert.equal(memory.personal.summary().count, 0);
+  } finally { memory.close(); }
 });
 
 test('a memory failure is reported and never reported as saved', async () => {
