@@ -13,6 +13,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { proposeCodingPatch, proposeFileContent, type ModelProposal } from './codingModel';
 import { gitStatus } from '../workspace/fileTools';
+import { inspectLocalService, inspectPath } from '../workspace/verification';
 import { planDirectFileAction, readDirectFile, type DirectFileAction } from '../workspace/fileTools';
 import { PRELIMINARY_CODING_RELIABILITY, routeTask } from '../models/codingBenchmark';
 
@@ -88,6 +89,12 @@ export class CodingBridge {
         return this.runTests();
       case 'create_repository':
         return this.proposeNewRepository(message);
+      case 'check_path':
+        return this.checkPath(intent);
+      case 'check_repository':
+        return this.checkRepository(intent);
+      case 'check_service':
+        return this.checkService(intent);
       case 'read_file':
         return this.readFile(message);
       case 'create_file':
@@ -220,6 +227,130 @@ export class CodingBridge {
         : 'There is no active coding task to cancel.',
       handled: true,
       snapshot,
+    };
+  }
+
+  // ---------------------------------------------------------- verification
+
+  /**
+   * Resolve the subject of an existence question.
+   *
+   * The spoken name is never trusted as a path: it is matched against what was
+   * actually discovered under the approved root, and only a real discovered
+   * path (or an absolute path that passes the containment check) is inspected.
+   * Anything else is reported as unresolvable rather than invented.
+   */
+  private resolveClaimSubject(intent: CodingIntent): { target: string; label: string } | { unresolved: string } {
+    const named = intent.path ?? intent.repositoryName;
+    if (intent.path) return { target: intent.path, label: intent.path };
+
+    const repos = discoverRepositories(this.sandbox);
+    const discovered = repos.slice(0, 20).map((r) => r.name).join(', ');
+
+    if (named) {
+      const wanted = named.toLowerCase();
+      const match = repos.find((r) => r.name.toLowerCase() === wanted)
+        ?? repos.find((r) => r.name.toLowerCase().includes(wanted))
+        ?? repos.find((r) => wanted.includes(r.name.toLowerCase()));
+      if (match) return { target: match.root, label: match.name };
+      return { unresolved: `Astra found no directory called "${named}" under ${this.sandbox.root}.${discovered ? ` Discovered repositories: ${discovered}.` : ' No repositories were discovered there.'} Astra has not created anything.` };
+    }
+
+    const repository = this.agent.getRepository();
+    if (repository) return { target: repository, label: repository };
+
+    // "the blog project" names no directory. With exactly one project under the
+    // root the answer is unambiguous; with several, Astra asks rather than
+    // guessing which one was meant.
+    if (repos.length === 1) return { target: repos[0].root, label: repos[0].name };
+    if (repos.length === 0) {
+      return { unresolved: `There are no projects under ${this.sandbox.root}, so there is nothing there to check. Astra has not created anything.` };
+    }
+    return { unresolved: `Astra cannot tell which project to inspect. Projects under ${this.sandbox.root}: ${discovered}. Name one, or ask to list the repositories.` };
+  }
+
+  /**
+   * Report what the filesystem actually shows for a path.
+   *
+   * "No" is the expected answer far more often than Astra's old behaviour
+   * assumed, and saying so plainly is the point.
+   */
+  private async checkPath(intent: CodingIntent): Promise<ChatToolResult> {
+    const subject = this.resolveClaimSubject(intent);
+    if ('unresolved' in subject) return { reply: subject.unresolved, handled: true };
+
+    const branch = (await gitStatus(subject.target, this.sandbox).catch(() => ({ branch: null }))).branch;
+    const inspection = inspectPath(subject.target, this.sandbox, branch);
+
+    if (inspection.unavailable) {
+      return { reply: `${inspection.unavailable} Astra has not verified anything about "${subject.label}".`, handled: true };
+    }
+    if (!inspection.exists) {
+      return {
+        reply: `**Verified: it does not exist.**\n\nAstra checked \`${inspection.target}\` on disk and found nothing there. Astra has not created it, and nothing was changed.`,
+        handled: true,
+      };
+    }
+
+    const kind = inspection.kind === 'directory' ? 'directory' : inspection.kind === 'file' ? 'file' : 'special entry';
+    const parts = [
+      `**Verified on disk**`,
+      `- Path: \`${inspection.target}\``,
+      `- Exists: yes — it is a ${kind}`,
+      // Git is stated only because a `.git` entry was actually found.
+      `- Git repository: ${inspection.isGitRepository ? `yes${inspection.branch ? ` (branch ${inspection.branch})` : ''}` : 'no — there is no .git entry here'}`,
+      inspection.entries.length ? `- Contents: ${inspection.entries.join(', ')}${inspection.entries.length >= 40 ? ', …' : ''}` : '',
+    ].filter(Boolean);
+    return { reply: parts.join('\n'), handled: true };
+  }
+
+  /** Answer "is this a repository?" from Git metadata, never from its name. */
+  private async checkRepository(intent: CodingIntent): Promise<ChatToolResult> {
+    const subject = this.resolveClaimSubject(intent);
+    if ('unresolved' in subject) return { reply: subject.unresolved, handled: true };
+
+    const inspection = inspectPath(subject.target, this.sandbox);
+    if (inspection.unavailable) return { reply: `${inspection.unavailable} Astra cannot say whether "${subject.label}" is a Git repository.`, handled: true };
+    if (!inspection.exists) {
+      return { reply: `**Verified: it does not exist.** \`${inspection.target}\` is not on disk, so it cannot be a Git repository. Astra has not created it.`, handled: true };
+    }
+
+    const status = inspection.isGitRepository ? await gitStatus(inspection.target, this.sandbox).catch(() => null) : null;
+    if (!inspection.isGitRepository) {
+      return {
+        reply: `**Verified: no.** \`${inspection.target}\` exists but has no \`.git\` entry, so Astra cannot call it a Git repository. Astra has not run \`git init\` and nothing was changed.`,
+        handled: true,
+      };
+    }
+    return {
+      reply: `**Verified: yes.** \`${inspection.target}\` has real Git metadata.\n- Branch: ${status?.branch ?? 'unknown'}\n- Working tree: ${status?.clean === false ? 'dirty' : 'clean'}\nAstra only reports this because it read the repository itself.`,
+      handled: true,
+    };
+  }
+
+  /**
+   * Probe a local service.
+   *
+   * Astra opens a real socket. It never asserts that a URL is live because a
+   * project was created, and it refuses to start servers, which it has no tool
+   * to do — that limitation is stated rather than papered over.
+   */
+  private async checkService(intent: CodingIntent): Promise<ChatToolResult> {
+    const address = intent.serviceUrl;
+    if (!address) {
+      return {
+        reply: 'Astra cannot check that address. Give it as a loopback address such as http://localhost:3000 and Astra will open a connection and report what it finds.',
+        handled: true,
+      };
+    }
+
+    const service = await inspectLocalService(address);
+    if (service.unavailable) {
+      return { reply: `${service.unavailable}\n\nAstra has not started anything. Astra cannot start web servers — approval-based project creation writes files and initialises local Git, but it does not launch a process or serve a URL.`, handled: true };
+    }
+    return {
+      reply: `**Verified: something accepted a connection on ${service.host}:${service.port}.** Astra completed a real TCP connection to ${service.url}. That proves the port is listening; it does not prove which application is behind it, and Astra did not start it.`,
+      handled: true,
     };
   }
 
@@ -356,6 +487,10 @@ export class CodingBridge {
     const target = path.join(this.sandbox.root, name);
     const stack = extractStackHints(message);
     const scaffold = buildScaffold(name, stack);
+    // Astra can create files and local Git metadata. It has no tool that
+    // launches a process, so a request that also names a URL or a port is
+    // answered honestly here instead of being allowed to imply a running site.
+    const asksForService = /\bhttps?:\/\/|\blocalhost\b|\b127\.0\.0\.1\b|\bport\s+\d{2,5}\b|\b(?:dev|development|preview|web)\s+server\b/i.test(message);
 
     let available = true;
     let reason = '';
@@ -374,6 +509,7 @@ export class CodingBridge {
       `- Availability: ${available ? 'destination is free' : `NOT AVAILABLE - ${reason}`}`,
       '',
       '**Dependency installation is currently blocked.** Package managers run arbitrary lifecycle scripts, so Astra will not run `npm install` or fetch remote packages. The scaffold will be created without installed dependencies, and Karl will need to install them manually.',
+      ...(asksForService ? ['', '**Astra cannot start a web server.** It writes files and initialises local Git, but it never launches a process, so it cannot make a URL available. After creation, ask Astra to check the address and it will open a real connection and report what it finds — or run the dev server yourself.'] : []),
       '',
       available
         ? 'Review the Coding workspace proposal and approve to create it.'

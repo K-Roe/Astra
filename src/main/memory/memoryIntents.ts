@@ -21,6 +21,15 @@ export interface MemoryIntent {
 
 /** Phrases that mean "store this". Deliberately narrow to avoid surprises. */
 const REMEMBER = /^\s*(?:please\s+)?(?:remember|note down|keep in mind|don'?t forget)\b\s*(?:that\s+|this\s*:?\s*)?/i;
+/**
+ * "Save a memory that ...", "store this note".
+ *
+ * The verb alone is far too broad — "save the file" is a coding request and
+ * must never become a memory — so the noun "memory"/"note" is mandatory. The
+ * defect this closes: without it, "save a memory that ..." matched nothing,
+ * fell through to the chat model, and produced an invented confirmation.
+ */
+const REMEMBER_NAMED = /^\s*(?:please\s+)?(?:save|store|record|write|add)\s+(?:this|that|it|a|an|my|the)?\s*(?:personal\s+)?(?:memor(?:y|ies)|note)\b\s*(?:that\s+|about\s+|for\s+|:\s*)?/i;
 /** A question about memory is not an instruction to store anything. */
 const QUESTION = /^(?:will|would|can|could|do|does|did|are|is|have|has)\s+(?:you|i|we)\b/i;
 const RECALL = /\b(?:what do you remember|what have i told you|what did i tell you|do you remember|what do you know about me|recall)\b/i;
@@ -114,8 +123,9 @@ export function detectMemoryIntent(raw: string): MemoryIntent | null {
 
   // Only an imperative counts. "Will you remember this?" asks a question and
   // must never write to the database.
-  if (REMEMBER.test(text) && !QUESTION.test(text)) {
-    const statement = text.replace(REMEMBER, '').replace(/^[:,]\s*/, '').trim();
+  const opener = REMEMBER.test(text) ? REMEMBER : REMEMBER_NAMED.test(text) ? REMEMBER_NAMED : null;
+  if (opener && !QUESTION.test(text)) {
+    const statement = text.replace(opener, '').replace(/^[:,]\s*/, '').trim();
     if (statement.length >= 3 && !QUESTION.test(statement)) {
       return { kind: 'remember', text: statement, subject: subjectFor(statement) };
     }

@@ -253,7 +253,8 @@ export class ChatService {
         memoryBlock,
         guidance,
         'Ordinary conversation cannot take actions or run commands. The separate coding workflow records real tool activity and approvals. Never claim an action occurred unless a recorded tool result confirms it.',
-        this.coding ? 'Runtime capability: scoped repository and file operations are available through the approval-based coding workflow. An action succeeds only after a trusted filesystem result and verification.' : 'Runtime capability: the coding and file service is unavailable.',
+        'Ordinary conversation also cannot inspect the disk, read Git metadata, contact a local service, or start one. Do not state that a repository, project, folder or file exists, do not name a path as its location, do not call anything a Git repository, and do not say a local website is running or available. You have no way to know any of these here, so say plainly that you have not checked, and offer to have Astra check it for real.',
+        this.coding ? 'Runtime capability: scoped repository and file operations are available through the approval-based coding workflow. An action succeeds only after a trusted filesystem result and verification. Astra can also verify whether a path exists, whether it is a Git repository, and whether a local address is listening, but only as a separate request that runs a real check.' : 'Runtime capability: the coding and file service is unavailable.',
       ].filter(Boolean).join('\n\n');
 
       const messages = [
@@ -280,18 +281,17 @@ export class ChatService {
       // markers the model actually used are kept.
       const cited = extractUsedCitations(raw, grounding);
       const supportedAnswer = raw.replace(/\s*\[(\d{1,2})\]/g, (marker, number: string) => cited.some((line) => line.startsWith(`[${number}]`)) ? marker : '').trim();
-      const falseMemoryClaim = containsFalseMemoryAction(supportedAnswer);
-      const falseFileClaim = containsFalseFileAction(supportedAnswer);
-      const answer = falseFileClaim
-        ? 'I have not created, edited or deleted a file in this reply. Tell me the intended file and what it should contain, and I can draft a proposal for your approval.'
-        : falseMemoryClaim
-        ? 'I have not saved, updated or forgotten a personal memory in this reply. Ask me directly to remember, update or forget something if you want to change stored memory.'
+      // Generated prose is never evidence. Each detector below names a class of
+      // claim that only a trusted tool result may make, so a reply that asserts
+      // one without a tool behind it is replaced by a truthful statement of what
+      // did and did not happen, plus the action that would establish the truth.
+      const violation = unverifiedClaimKind(supportedAnswer);
+      const answer = violation
+        ? UNVERIFIED_CLAIM_REPLIES[violation]
         : cited.length > 0 ? `${supportedAnswer}\n\nSources:\n${cited.join('\n')}` : supportedAnswer;
       this.history.push({ role: 'user', content: text }, { role: 'assistant', content: answer });
-      this.detail = falseFileClaim
-        ? 'No filesystem operation was run.'
-        : falseMemoryClaim
-        ? 'No personal memory was changed.'
+      this.detail = violation
+        ? CLAIM_DETAILS[violation]
         : grounding.hasKnowledge
         ? `Answered from ${grounding.passages.length} stored source passage(s).`
         : this.memory?.summary().count
@@ -381,16 +381,89 @@ function describeMemoryAction(action: MemoryCommandResult['action']): string {
   }
 }
 
-/** Generated text is never evidence that a database mutation succeeded. */
-function containsFalseMemoryAction(answer: string): boolean {
-  return /\b(?:i(?:'ve| have)?|astra has)\s+(?:now\s+)?(?:saved|stored|updated|changed|forgotten|deleted|removed)\s+(?:that|this|your|my|it|a\s+(?:personal\s+)?memory)\b/i.test(answer)
-    || /\b(?:saved|stored|updated|forgotten|deleted)\s+(?:to|from|in)\s+(?:my|your|personal)\s+memory\b/i.test(answer)
-    || /\bi\s*(?:will|'ll)\s+(?:remember|save|store)\s+(?:that|this|it|your|my)\b/i.test(answer);
-}
+/**
+ * Classes of claim that only a trusted tool result may make.
+ *
+ * Each exists because a generated sentence once made that claim without a tool
+ * behind it. Ordering matters only for the replacement text shown to Karl.
+ */
+export type UnverifiedClaim =
+  | 'service'
+  | 'location'
+  | 'git'
+  | 'file'
+  | 'memory';
+
+const SERVICE_CLAIM: readonly RegExp[] = [
+  /\b(?:website|site|server|app|application|page)\b[^.!?]*\b(?:is|are|now|available|live|reachable|running|hosted|served)\b[^.!?]*\b(?:running|live|available|reachable|hosted|up|listening)\b/i,
+  /\b(?:running|available|live|reachable)\b[^.!?]*\b(?:at|on)\b[^.!?]*\b(?:localhost|127\.0\.0\.1|\[::1\]|https?:\/\/)/i,
+  /\b(?:i(?:'ve| have)?|astra has)\s+(?:now\s+)?(?:started|launched|spun up|hosted|deployed|served)\b/i,
+];
+
+/** Naming a path as the location of something, or asserting that it exists. */
+const LOCATION_CLAIM: readonly RegExp[] = [
+  /\b(?:repository|repo|project|folder|directory|site|website|blog)\b[^.!?]*\b(?:is|are|now)\b[^.!?]*\b(?:located|at|in|under|inside)\b/i,
+  /\b(?:now\s+)?(?:located|sits|lives|stored|kept)\b[^.!?]*\b(?:at|in|under)\b/i,
+  /\b(?:path|directory|folder|repository|repo|project)\b[^.!?]*\b(?:does\s+)?(?:not\s+)?exists?\b/i,
+];
+
+/** Calling a directory a Git repository, or asserting a commit/push happened. */
+const GIT_CLAIM: readonly RegExp[] = [
+  /\b(?:is|are|now)\s+(?:a\s+|an\s+|the\s+)?(?:git|version-controlled)\b/i,
+  /\b(?:initiali[sz]ed|initialised|initialized)\s+(?:a\s+|an\s+)?git\b/i,
+  /\b(?:git\s+)?(?:repo|repository)\b[^.!?]*\b(?:created|set up|initiali[sz]ed)\b/i,
+  /\b(?:committed|pushed)\b[^.!?]*\b(?:to|onto)\b/i,
+];
 
 /** A generated sentence cannot substitute for a verified filesystem result. */
-function containsFalseFileAction(answer: string): boolean {
-  return /\b(?:i(?:'ve| have)?|astra has)\s+(?:now\s+)?(?:created|written|saved|edited|updated|deleted|removed)\s+(?:the\s+|your\s+|a\s+|this\s+)?(?:file|folder|directory|[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8})\b/i.test(answer)
-    || /\b(?:file|folder|directory)\s+(?:has been|was)\s+(?:created|written|saved|edited|updated|deleted|removed)\b/i.test(answer)
-    || /\b(?:the|your)\s+file\s+(?:now\s+)?exists\b/i.test(answer);
+const FILE_CLAIM: readonly RegExp[] = [
+  /\b(?:i(?:'ve| have)?|astra has)\s+(?:now\s+)?(?:created|written|saved|edited|updated|deleted|removed)\s+(?:the\s+|your\s+|a\s+|this\s+)?(?:file|folder|directory|[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8})\b/i,
+  /\b(?:file|folder|directory)\s+(?:has been|was)\s+(?:created|written|saved|edited|updated|deleted|removed)\b/i,
+  /\b(?:the|your)\s+file\s+(?:now\s+)?exists\b/i,
+];
+
+/** Generated text is never evidence that a database mutation succeeded. */
+const MEMORY_CLAIM: readonly RegExp[] = [
+  /\b(?:i(?:'ve| have)?|astra has)\s+(?:now\s+)?(?:saved|stored|updated|changed|forgotten|deleted|removed)\s+(?:that|this|your|my|it|a\s+(?:personal\s+)?memory)\b/i,
+  /\b(?:saved|stored|updated|forgotten|deleted)\s+(?:to|from|in)\s+(?:my|your|personal)\s+memory\b/i,
+  /\bi\b\s*(?:have|'ve)?\s*(?:recorded|noted|logged|registered|written down)\s+(?:that|this|it)\b[^.!?]*\b(?:memory|remembered|memor(?:y|ies))\b/i,
+  /\b(?:i\s*(?:will|'ll)|i(?:'ve| have))\s+(?:remember|save|store|record)\s+(?:that|this|it|your|my)\b/i,
+];
+
+/**
+ * Identify the strongest unsupported claim in a generated reply, or null.
+ *
+ * Exported for regression tests: the defect being guarded against was a class
+ * of missing coverage, so the detector itself is part of the contract.
+ */
+export function unverifiedClaimKind(answer: string): UnverifiedClaim | null {
+  if (SERVICE_CLAIM.some((pattern) => pattern.test(answer))) return 'service';
+  if (GIT_CLAIM.some((pattern) => pattern.test(answer))) return 'git';
+  if (LOCATION_CLAIM.some((pattern) => pattern.test(answer))) return 'location';
+  if (MEMORY_CLAIM.some((pattern) => pattern.test(answer))) return 'memory';
+  if (FILE_CLAIM.some((pattern) => pattern.test(answer))) return 'file';
+  return null;
 }
+
+/**
+ * Truthful replacements.
+ *
+ * None of these refuses the underlying request. Each states what was not
+ * verified and names the real action that would establish the truth, so the
+ * tools stay usable rather than Astra being taught to say no.
+ */
+const UNVERIFIED_CLAIM_REPLIES: Readonly<Record<UnverifiedClaim, string>> = {
+  service: 'I have not verified that anything is serving a local address, and I did not start anything. Astra cannot launch web servers. Give me the address and Astra will open a real connection and report whether anything accepted it.',
+  location: 'I have not checked the filesystem in this reply, so I cannot confirm where that project lives. Astra can check: ask it to verify the path and it will inspect the disk and report what it actually finds.',
+  git: 'I have not read any Git metadata in this reply, so I cannot call that a repository. Astra can check by looking for real .git metadata — ask it to verify and it will report exactly what it finds.',
+  file: 'I have not created, edited or deleted a file in this reply. Tell me the intended file and what it should contain, and I can draft a proposal for your approval.',
+  memory: 'I have not saved, updated or forgotten a personal memory in this reply. Ask me directly to remember, update or forget something and the memory service will confirm the result.',
+};
+
+const CLAIM_DETAILS: Readonly<Record<UnverifiedClaim, string>> = {
+  service: 'No local service was contacted.',
+  location: 'No filesystem check was run.',
+  git: 'No Git metadata was read.',
+  file: 'No filesystem operation was run.',
+  memory: 'No personal memory was changed.',
+};

@@ -33,6 +33,9 @@ export type CodingIntentKind =
   | 'delete_file'
   | 'run_tests'
   | 'show_changes'
+  | 'check_path'
+  | 'check_repository'
+  | 'check_service'
   | 'cancel_task'
   | 'chitchat';
 
@@ -48,6 +51,10 @@ export interface CodingIntent {
   readonly mutating: boolean;
   /** Set when routing was ambiguous and Karl must disambiguate. */
   readonly needsClarification: string | null;
+  /** Absolute path the request names, for the verification intents. */
+  readonly path: string | null;
+  /** Loopback address the request names, for the service intent. */
+  readonly serviceUrl: string | null;
 }
 
 /** Intents that could change files or run commands. All require approval. */
@@ -84,7 +91,52 @@ interface Rule {
   readonly pattern: RegExp;
   readonly repository?: RegExp;
   readonly search?: RegExp;
+  /**
+   * Skip this rule when the message also matches the blocker.
+   *
+   * Used where a broad noun would otherwise steal a message that is really
+   * about something else: "create a folder inside my repositories" is a
+   * creation request, not a request to list them.
+   */
+  readonly blockedBy?: RegExp;
 }
+
+/** Words that make a request about creating something. */
+const CREATION_FRAME = /\b(create|creating|make|making|made|scaffold|set up|setup|start|started|new|add|build|generate|initialise|initialize|bootstrap|scaffold)\b/i;
+
+/** Any loopback address or a bare `localhost`, with or without a port. */
+const LOOPBACK_ADDRESS = /\b(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(?::\d{1,5})?\b/i;
+
+/** A `http(s)://` URL of any host, used to keep URL traffic out of repo routing. */
+const ANY_URL = /\bhttps?:\/\//i;
+
+/** Any address or host that belongs to a service check rather than a repository. */
+const SERVICE_ADDRESS = new RegExp(String.raw`${ANY_URL.source}|${LOOPBACK_ADDRESS.source}`, 'i');
+
+/** An absolute Windows path as Karl would read it aloud or paste it. */
+const WINDOWS_PATH = /\b[A-Za-z]:[\\/]/;
+
+/** Nouns that mean a directory, a project or a local service. */
+const PROJECT_NOUNS = 'repo(?:sitory|sitories)?|project|app|application|dashboard|service|site|website|blog|folder|directory|codebase|package';
+
+/**
+ * A claim about the existence or location of one of those nouns.
+ *
+ * Built from `PROJECT_NOUNS` so the two cannot drift apart.
+ */
+const PROJECT_EXISTENCE_CLAIM = new RegExp(
+  String.raw`\b(?:does|do|is|are|has|have|where|which|what)\b[^?]*\b(?:${PROJECT_NOUNS})\b`,
+  'i',
+);
+
+/**
+ * A request explicitly about a single file.
+ *
+ * CA-01B gives files their own read/create/write/edit/delete tools with exact
+ * paths and byte verification. Existence questions about a *file* keep using
+ * them; `check_path` is for directories, projects and repositories.
+ */
+const FILE_SUBJECT = /\bfile\b|\b[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8}\b/i;
 
 const RULES: readonly Rule[] = [
   { kind: 'cancel_task', pattern: /\b(cancel|stop|abort|halt)\b.*\b(task|job|work)\b|\bcancel (the |current )?(task|everything)\b/i },
@@ -94,7 +146,44 @@ const RULES: readonly Rule[] = [
   { kind: 'cancel_task', pattern: /\bstop (what you(?:'| a)re? doing|the current task|now)\b/i },
   { kind: 'cancel_task', pattern: /\b(abort|halt)\b\s+(?:the\s+)?(?:current\s+)?(task|work|everything|job)\b/i },
   { kind: 'show_changes', pattern: /\b(show|display|see)\b.*\b(what you changed|your changes|diff|changes)\b|\bgit diff\b|\bshow me the diff\b/i },
-  { kind: 'list_repositories', pattern: /\b(list|show|what are)\b.*\b(repositor(y|ies)|projects)\b|\bmy repositor/i },
+
+  // ---- Verification intents. These come first on purpose: a question about
+  // whether something exists, is a repository, or is running must be answered
+  // from a real check, never from the language model's imagination.
+  {
+    kind: 'check_service',
+    pattern: /\b(?:is|are|does|do|can|could|has|have|still|anything)\b[^?]*\b(?:running|listening|available|reachable|responding|live|up and running|serving|hosted)\b/i,
+    blockedBy: CREATION_FRAME,
+  },
+  {
+    kind: 'check_repository',
+    pattern: /\b(?:is|are|does|do|can|could|has|have)\b[^?]*\b(?:a\s+|an\s+|the\s+)?(?:git|version(?:[\s-]controlled)?)\b[^?]*\b(?:repo(?:sitory)?|controlled|tracked|initiali[sz]ed|initialised|initialized)\b/i,
+    blockedBy: CREATION_FRAME,
+  },
+  {
+    kind: 'check_repository',
+    pattern: /\b(?:git|version control|vc)\b[^?]*\b(?:repo|repository|folder|directory|project)\b/i,
+    blockedBy: CREATION_FRAME,
+  },
+  {
+    kind: 'check_path',
+    pattern: /\b(?:does|do|is|are|was|were)\b[^?]*\b(?:exist|still exist|still there|still present|actually exist)\b/i,
+    blockedBy: FILE_SUBJECT,
+  },
+  {
+    kind: 'check_path',
+    pattern: /\bwhere\s+(?:is|are|does|do)\b[^?]*\b(?:locat\w*|sit|lives?|exist|kept|stored)\b/i,
+    blockedBy: FILE_SUBJECT,
+  },
+  {
+    kind: 'check_path',
+    pattern: /\b(?:check|verify|confirm|look)\b[^?]*\b(?:exist|folder|directory|project|repo(?:sitory)?|path)\b/i,
+    blockedBy: FILE_SUBJECT,
+  },
+
+  // ---- Existing actions. A message that creates something must never be
+  // demoted to a read-only listing just because it says "my repositories".
+  { kind: 'list_repositories', pattern: /\b(list|show|what are)\b.*\b(repositor(y|ies)|projects)\b|\bmy repositor/i, blockedBy: CREATION_FRAME },
   { kind: 'run_tests', pattern: /\b(run|execute)\b.*\b(test|tests|test suite|npm test)\b/i },
   { kind: 'delete_file', pattern: /\b(delete|remove)\b.*(?:\bfile\b|\.[A-Za-z0-9]{1,8}\b)/i },
   { kind: 'edit_file', pattern: /\b(edit|update|change|replace)\b.*(?:\bfile\b|\bcontents?\b|\bfunction\b|\.[A-Za-z0-9]{1,8}\b)/i },
@@ -102,7 +191,12 @@ const RULES: readonly Rule[] = [
   { kind: 'read_file', pattern: /\b(?:does|is)\b.*\bfile\b.*\b(?:exist|there|present)\b/i },
   { kind: 'create_file', pattern: /\b(create|make|add)\b.*(?:\bfile\b|\bcomponent\b|\bcontroller\b|\bREADME\b|\.[A-Za-z0-9]{1,8}\b)/i },
   { kind: 'write_file', pattern: /\b(write|save)\b.*(?:\bfile\b|\bREADME\b|\.[A-Za-z0-9]{1,8}\b)/i },
-  { kind: 'create_repository', pattern: /\b(create|make|start|scaffold|set up|new)\b.*\b(repo(?:sitory|sitories)?|project|app|application|dashboard|service|site)\b/i },
+  // A request to make something must be recognised however Karl names it. The
+  // earlier defect: the noun list stopped at "site", so "create a blog called
+  // X" matched no rule at all, became chitchat, and was handed to the chat
+  // model — which invented the repository, its path and its URL.
+  { kind: 'create_repository', pattern: /\b(create|make|start|scaffold|set up|new|generate|bootstrap|initialise|initialize)\b.*\b(repo(?:sitory|sitories)?|project|app|application|dashboard|service|site|website|blog|folder|directory)\b/i },
+  { kind: 'create_repository', pattern: /\bi\s+(?:want|need|would like|am looking for)\b.*\b(?:repo(?:sitory|sitories)?|project|app|application|dashboard|service|site|website|blog|folder|directory)\b/i },
   // "create a new repository called X" also matches, but only after the more
   // specific "called/named X" form below has had a chance to run.
   { kind: 'create_repository', pattern: /\b(?:create|make|scaffold|start)\b.*\brepositor(y|ies)\b/i },
@@ -112,7 +206,10 @@ const RULES: readonly Rule[] = [
   { kind: 'add_feature', pattern: /\b(add|implement|build|create)\b.*\b(feature|support for|endpoint|function|button|page|component|route)\b/i },
   { kind: 'find_code', pattern: /\b(find|locate|where is|search for|grep|look for)\b/i, search: /\b(?:where is|where|find|locate|search for|grep|look for)\b\s+(?:the\s+|a\s+|an\s+)?(.+?)(?:\s+(?:implemented|defined|used|handled|located)\b|[?.]|$)/i },
   { kind: 'explain_project', pattern: /\b(explain|describe|what is|whats|tell me about|summar(y|ise|ize))\b.*\b(this|the)? ?(project|repo|repository|codebase|code)\b/i },
-  { kind: 'select_repository', pattern: /\b(open|select|switch to|go to)\s+(?:the\s+)?(?:my\s+)?([A-Za-z][A-Za-z0-9_.-]{1,40})\b/i, repository: /\b(?:open|select|switch to|go to)\s+(?:the\s+)?(?:my\s+)?([A-Za-z][A-Za-z0-9_.-]{1,40})\b/i },
+  // A URL or port belongs to the service check, never to a repository named
+  // "website". Blocking here is what stops "open the website at localhost:3000"
+  // from being resolved as a repository called "website".
+  { kind: 'select_repository', pattern: /\b(open|select|switch to|go to)\s+(?:the\s+)?(?:my\s+)?([A-Za-z][A-Za-z0-9_.-]{1,40})\b/i, repository: /\b(?:open|select|switch to|go to)\s+(?:the\s+)?(?:my\s+)?([A-Za-z][A-Za-z0-9_.-]{1,40})\b/i, blockedBy: SERVICE_ADDRESS },
   { kind: 'select_repository', pattern: /\bwork on\s+(?:the\s+)?(?:my\s+)?([A-Za-z][A-Za-z0-9_.-]{1,40})\b/i, repository: /\bwork on\s+(?:the\s+)?(?:my\s+)?([A-Za-z][A-Za-z0-9_.-]{1,40})\b/i },
   { kind: 'select_repository', pattern: /\b(?:open|select|switch to|work on)\s+(?:the\s+)?(?:my\s+|the\s+)?([A-Za-z0-9_.-]+)\s+(?:project|repo|repository)\b/i, repository: /\b(?:open|select|switch to|work on)\s+(?:the\s+)?(?:my\s+|the\s+)?([A-Za-z0-9_.-]+)\s+(?:project|repo|repository)\b/i },
 ];
@@ -123,9 +220,10 @@ const RULES: readonly Rule[] = [
  */
 const GENERIC_NAMES = new Set([
   'project', 'projects', 'repo', 'repos', 'repository', 'repositories',
-  'file', 'files', 'folder', 'directory', 'code', 'codebase',
-  'app', 'application', 'service', 'site', 'page', 'thing', 'stuff',
-  'one', 'it', 'this', 'that', 'test', 'tests', 'task', 'example', 'default',
+  'file', 'files', 'folder', 'folders', 'directory', 'directories', 'code', 'codebase',
+  'app', 'application', 'service', 'site', 'website', 'webpage', 'blog', 'server',
+  'page', 'thing', 'stuff', 'one', 'it', 'this', 'that', 'test', 'tests', 'task',
+  'example', 'default', 'localhost', 'url',
 ]);
 
 /**
@@ -218,11 +316,98 @@ export function extractNewRepositoryName(text: string): string | null {
   return null;
 }
 
-/** Only absolute Windows paths are accepted for direct file operations. */
-export function extractAbsoluteFilePath(text: string): string | null {
+/**
+ * Words that never end a path, in any phrasing.
+ *
+ * These are function words and interrogative verbs, so trimming them can only
+ * remove speech that followed the path.
+ */
+const PATH_FUNCTION_WORDS = 'exist|exists|existed|there|still|now|yet|the|a|an|is|are|was|were|of|in|at|on|to';
+
+/**
+ * Nouns that end a path only when the sentence is a question about it.
+ *
+ * `Is C:\tmp\BlogRepo a git repository?` puts three words after the path. In an
+ * imperative (`Create file C:\tmp\a.ts`) the same words would be part of a
+ * legitimate directory name, so this trimming is only applied when the caller
+ * has already determined the message is interrogative.
+ *
+ * Trimming too much fails safely: the tool then reports "not found" *and prints
+ * the exact path it checked*, rather than asserting something about a path
+ * nobody verified. Trimming too little — the original behaviour — produced a
+ * confidently wrong path, which is how `Astra's Blog` became `Astra`.
+ */
+const PATH_QUESTION_WORDS = 'repository|repo|repositories|folder|directory|project|website|site|blog|application|app|controlled|version|git|located|sit|sits|lives|stored|kept|inside|under|about|one|this|that|it|here';
+
+/**
+ * Words that mean more speech follows.
+ *
+ * `C:\repos\Astra's Blog exist?` ends with "Blog exist". Trimming "Blog" would
+ * report on `…Astra's`, which is a real path that does not exist — a confident
+ * wrong answer. The presence of a verb or existential after a noun means the
+ * noun was part of the path, so the run is left alone.
+ */
+const PATH_SPEECH_MARKERS = 'exist|exists|existed|is|are|was|were|there|still|now|yet';
+
+function trimPathTail(raw: string, extraWords: string): string {
+  const run = /((?:\s+\S+)+)$/.exec(raw)?.[1];
+  if (!run) return raw;
+  const tokens = run.trim().split(/\s+/);
+  const trimmable = new RegExp(String.raw`^(?:${extraWords ? `${extraWords}|` : ''}${PATH_FUNCTION_WORDS})$`, 'i');
+  const speech = new RegExp(String.raw`^(?:${PATH_SPEECH_MARKERS})$`, 'i');
+
+  const dropped: string[] = [];
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const token = tokens[index];
+    if (!trimmable.test(token)) break;
+    // A noun belongs to the path when speech continues after it: in
+    // `C:\repos\Astra's Blog exist?`, "Blog" is followed by "exist".
+    if (!speech.test(token) && dropped.some((later) => speech.test(later))) break;
+    dropped.unshift(token);
+  }
+  if (dropped.length === 0) return raw;
+  // Each dropped token was preceded by one separator character.
+  return raw.slice(0, raw.length - dropped.reduce((total, token) => total + token.length + 1, 0));
+}
+
+/**
+ * Only absolute Windows paths are accepted for direct file operations.
+ *
+ * An apostrophe is legal in a Windows name and is kept, but an imperative is
+ * still read as `verb file <path>` so that trailing prose ("with this content")
+ * cannot be swallowed into the path. Only the verification intents, whose
+ * messages are questions by construction, read past the first space — otherwise
+ * `C:\repos\Astra's Blog exist?` would truncate to `C:\repos\Astra`, a real path
+ * that does not exist and therefore a confident wrong answer.
+ */
+export function extractAbsoluteFilePath(text: string, interrogative = false): string | null {
   const quoted = /["'`]([A-Za-z]:[\\/][^"'`]+)["'`]/.exec(text)?.[1];
-  const raw = quoted ?? /[A-Za-z]:[\\/][^\s"'`<>|?*]+/.exec(text)?.[0];
-  return raw?.replace(/[.,!?;:]+$/, '') ?? null;
+  if (quoted) return quoted.replace(/[.,!?;:]+$/, '') || null;
+
+  const start = /[A-Za-z]:[\\/]/.exec(text)?.index;
+  if (start === undefined) return null;
+
+  if (!interrogative) {
+    return /[A-Za-z]:[\\/][^\s"`<>|?*]+/.exec(text.slice(start))?.[0].replace(/[.,!?;:]+$/, '') || null;
+  }
+
+  // A period only ends the path when it is not a file extension.
+  const boundary = /[.!?](?=\s|$)/.exec(text.slice(start));
+  const raw = (boundary ? text.slice(start, start + boundary.index) : text.slice(start)).replace(/[,;:]+$/, '');
+  return trimPathTail(raw, PATH_QUESTION_WORDS) || null;
+}
+
+/**
+ * The loopback address Karl named, if any.
+ *
+ * Only loopback is recognised, because that is the only address Astra is
+ * allowed to probe. A public hostname is deliberately not recognised here, so
+ * it cannot become a service claim that Astra never checked.
+ */
+export function extractLoopbackAddress(text: string): string | null {
+  const match = /\b((?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?)\b/i.exec(text)?.[1];
+  if (!match) return null;
+  return match.toLowerCase().startsWith('http') ? match : `http://${match}`;
 }
 
 /** Technology keywords that inform a scaffold proposal (never an install). */
@@ -252,6 +437,8 @@ export function routeCodingIntent(message: string): CodingIntent {
     interpretedAs: '',
     mutating: false,
     needsClarification: null,
+    path: null,
+    serviceUrl: null,
     ...over,
   });
 
@@ -264,11 +451,14 @@ export function routeCodingIntent(message: string): CodingIntent {
   // "what are my repositories?" is a listing request; "what does push mean?"
   // is not.
   if (QUESTION_MARKERS.test(text) && isMetaQuestion(text) && !CLEAR_COMMAND.test(text)) {
-    return base({ interpretedAs: 'Treating this as a question about the concept rather than an instruction.' });
+    return verificationFallback(text, base) ?? base({ interpretedAs: 'Treating this as a question about the concept rather than an instruction.' });
   }
 
   for (const rule of RULES) {
     if (!rule.pattern.test(text)) continue;
+    // A blocked rule must not silently win: if blocking removed this rule, try
+    // the next one rather than treating the message as ordinary conversation.
+    if (rule.blockedBy?.test(text)) continue;
     const repositoryName = rule.repository ? (rule.repository.exec(text)?.[1] ?? null) : extractRepositoryHint(text);
     const searchTerm = rule.search ? sanitiseSearchTerm(rule.search.exec(text)?.[1] ?? '') : null;
 
@@ -284,11 +474,74 @@ export function routeCodingIntent(message: string): CodingIntent {
       mutating: MUTATING.has(rule.kind),
       // "find where it is implemented" must ask, not search for the pronoun "it".
       needsClarification: needsClarificationFor(rule.kind, intentRepository, searchTerm),
+      ...verificationEntities(rule.kind, text),
     });
     return intent;
   }
 
+  // The safety net. This is the structural fix for the defect that produced
+  // "the repository is now located at C:\...\Astra's Blog": the rule table could
+  // always be out-completed by a phrasing nobody had enumerated, and the
+  // fallback was the chat model. Anything that names a loopback service, a
+  // filesystem path or a project's existence must reach a real check instead,
+  // no matter how it was phrased.
+  const fallback = verificationFallback(text, base);
+  if (fallback) return fallback;
+
   return base({ interpretedAs: 'No coding instruction recognised; treating this as conversation.' });
+}
+
+/**
+ * Route a message that names a service, a path or a project's existence to a
+ * verification tool, whatever the phrasing. Returns null when the message is
+ * genuinely conversational.
+ *
+ * This deliberately is not a refusal: each branch produces a real filesystem or
+ * socket check whose result becomes the reply.
+ */
+function verificationFallback(text: string, base: (over: Partial<CodingIntent>) => CodingIntent): CodingIntent | null {
+  if (LOOPBACK_ADDRESS.test(text) || /\b(?:dev|development|preview|web)\s+server\b/i.test(text) || /\bport\s+\d{2,5}\b/i.test(text)) {
+    const serviceUrl = extractLoopbackAddress(text) ?? (LOOPBACK_ADDRESS.test(text) ? 'http://localhost' : null);
+    return base({
+      kind: 'check_service',
+      serviceUrl,
+      interpretedAs: 'Check whether a local service is really listening, instead of assuming it is.',
+      ...verificationEntities('check_service', text),
+    });
+  }
+
+  if (WINDOWS_PATH.test(text)) {
+    return base({
+      kind: 'check_path',
+      interpretedAs: 'Inspect the named path on disk, instead of assuming it exists.',
+      ...verificationEntities('check_path', text),
+    });
+  }
+
+  // "a repository", "a project", "a folder" as the subject of a claim still
+  // needs a real answer even when no path was typed.
+  if (PROJECT_EXISTENCE_CLAIM.test(text)) {
+    return base({
+      kind: 'check_path',
+      interpretedAs: 'Inspect the named project or directory on disk, instead of assuming it exists.',
+      ...verificationEntities('check_path', text),
+    });
+  }
+
+  return null;
+}
+
+/** Pull the address or path out of the message for the verification intents. */
+function verificationEntities(kind: CodingIntentKind, text: string): Partial<CodingIntent> {
+  if (kind === 'check_service') {
+    return { serviceUrl: extractLoopbackAddress(text) ?? (LOOPBACK_ADDRESS.test(text) ? 'http://localhost' : null) };
+  }
+  if (kind === 'check_path' || kind === 'check_repository') {
+    // These intents only exist for questions, so a trailing question phrase
+    // may be trimmed from the path.
+    return { path: extractAbsoluteFilePath(text, true) };
+  }
+  return {};
 }
 
 function describe(kind: CodingIntentKind, repository: string | null, term: string | null): string {
@@ -309,6 +562,9 @@ function describe(kind: CodingIntentKind, repository: string | null, term: strin
     case 'delete_file': return 'Propose deleting the named file; approval is required.';
     case 'run_tests': return 'Run the approved test command.';
     case 'show_changes': return 'Show the current Git diff for the selected repository.';
+    case 'check_path': return 'Inspect the named path on disk and report only what the filesystem shows.';
+    case 'check_repository': return 'Check for real Git metadata and report only what is present.';
+    case 'check_service': return 'Probe the local address and report whether a connection was actually accepted.';
     case 'cancel_task': return 'Cancel the current coding task and stop further tool actions.';
     default: return '';
   }
