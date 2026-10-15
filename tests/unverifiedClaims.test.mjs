@@ -59,13 +59,22 @@ test('a request to create a project never falls through to the chat model', () =
     "Can you make me a blog called Astra's Blog?",
     "Set up a blog called Astra's Blog",
     "I want a website called Astra's Blog for my writing",
-    "Make a folder called Astra's Blog for blog posts",
-    "Create a folder called Blog inside my repositories",
     "Start a website called Astra's Blog at http://localhost:3000",
   ]) {
     const intent = routeCodingIntent(request);
     assert.equal(intent.kind, 'create_repository', request);
     assert.notEqual(intent.kind, 'chitchat', `${request} must not reach the language model`);
+  }
+
+  // A folder is a directory, not a scaffolded project. Routing it to the
+  // scaffolder made Astra propose a whole repository for one empty directory.
+  for (const request of [
+    "Make a folder called Astra's Blog for blog posts",
+    "Create a folder called Blog inside my repositories",
+  ]) {
+    const intent = routeCodingIntent(request);
+    assert.equal(intent.kind, 'create_directory', request);
+    assert.equal(intent.mutating, true, `${request} must require approval`);
   }
 });
 
@@ -73,7 +82,7 @@ test('a creation request is never demoted to a read-only listing', () => {
   // "…inside my repositories" used to match `list_repositories`, silently
   // turning a mutating request into a read-only one.
   const intent = routeCodingIntent('Create a folder called Blog inside my repositories');
-  assert.equal(intent.kind, 'create_repository');
+  assert.notEqual(intent.kind, 'list_repositories');
   assert.equal(intent.mutating, true, 'a creation request must still require approval');
 });
 

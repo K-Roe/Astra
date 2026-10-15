@@ -222,7 +222,24 @@ export interface CodingTaskView {
     readonly investigationNotes: readonly string[];
     readonly patches?: readonly { readonly file: string; readonly hunks: readonly { readonly find: string; readonly replace: string }[] }[];
     readonly newRepository?: { readonly name: string; readonly files: Readonly<Record<string, string>> };
-    readonly fileOperation?: { readonly action: 'create' | 'write' | 'edit' | 'delete'; readonly target: string; readonly content?: string; readonly beforeSha256: string | null; readonly createParent: boolean };
+    /**
+ * The exact operation Karl approved.
+ *
+ * The two `*_directory` actions are new: a directory is created empty, and a
+ * directory delete is recursive. The latter always carries the full listing and
+ * entry count that was shown before approval, so the workspace can display the
+ * real scope of an irreversible deletion rather than a bare action name.
+ */
+readonly fileOperation?: {
+      readonly action: 'create' | 'write' | 'edit' | 'delete' | 'create_directory' | 'delete_directory';
+      readonly target: string;
+      readonly content?: string;
+      readonly beforeSha256: string | null;
+      readonly createParent: boolean;
+      readonly entries?: readonly string[];
+      readonly entryCount?: number;
+      readonly containsGit?: boolean;
+    };
     readonly correctionAttempt?: number;
     readonly branch?: string | null;
   } | null;

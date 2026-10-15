@@ -21,22 +21,49 @@ export class FileToolError extends Error {
 
 export const MAX_EDIT_FILE_BYTES = 2_000_000;
 
-export type DirectFileAction = 'create' | 'write' | 'edit' | 'delete';
+export type DirectFileAction = 'create' | 'write' | 'edit' | 'delete' | 'create_directory' | 'delete_directory';
+
+/** True for the two actions that act on a directory rather than a file. */
+export function isDirectoryAction(action: DirectFileAction): boolean {
+  return action === 'create_directory' || action === 'delete_directory';
+}
+
+/**
+ * Refuse an unbounded recursive delete.
+ *
+ * A folder with more entries than this is not something Karl reviewed in a
+ * chat message, so it is refused rather than silently truncated.
+ */
+export const MAX_DIRECTORY_ENTRIES = 5000;
+
 export interface DirectFilePlan {
   readonly action: DirectFileAction;
   readonly target: string;
   readonly content?: string;
   /** Hash of the exact approved UTF-8 bytes for create/write/edit. */
   readonly expectedSha256?: string;
-  /** Hash of the exact bytes at planning time; null means the file was absent. */
+  /**
+   * Hash of the exact bytes at planning time; null means the file was absent.
+   *
+   * For a directory this is a digest of its whole manifest, which gives a
+   * recursive delete the same "changed since planning" guarantee a file delete
+   * already had.
+   */
   readonly beforeSha256: string | null;
   readonly createParent: boolean;
+  /** Everything a recursive directory delete would remove, relative and sorted. */
+  readonly entries?: readonly string[];
+  /** Number of entries `entries` describes, which may exceed the listed sample. */
+  readonly entryCount?: number;
+  /** True when the directory contains a `.git` entry. */
+  readonly containsGit?: boolean;
 }
 
 /** Narrow fault-injection seam for permission and readback verification tests. */
 export interface DirectFileIO {
   readonly write?: (target: string, content: string, flag: 'w' | 'wx') => void;
-  readonly remove?: (target: string) => void;
+  readonly remove?: (target: string, options?: { recursive?: boolean }) => void;
+  readonly mkdir?: (target: string) => void;
 }
 
 function safeDirectTarget(candidate: string, sandbox: SandboxOptions): string {
@@ -69,6 +96,48 @@ function readDirectBytes(target: string): Buffer {
 
 const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 
+/**
+ * Describe exactly what a recursive delete would remove.
+ *
+ * The listing is the safety mechanism Karl relies on: a recursive delete is
+ * irreversible, so the plan must show every path and its size rather than a
+ * count. The digest of that manifest is what staleness is checked against, so
+ * a folder that gains or loses anything between planning and approval is
+ * refused rather than deleted on a stale promise.
+ */
+export function inspectDirectoryManifest(target: string, sandbox: SandboxOptions): { paths: readonly string[]; count: number; bytes: number; truncated: boolean; containsGit: boolean; sha256: string } {
+  const safe = safeDirectTarget(target, sandbox);
+  const stats = statSync(safe);
+  if (!stats.isDirectory()) throw new FileToolError('target is not a directory');
+
+  const rows: string[] = [];
+  let count = 0;
+  let bytes = 0;
+  let truncated = false;
+  const walk = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const absolute = path.join(directory, entry.name);
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      count += 1;
+      if (count > MAX_DIRECTORY_ENTRIES) { truncated = true; return; }
+      if (entry.isDirectory()) {
+        if (entry.name === '.git') containsGit = true;
+        rows.push(`${relative}/`);
+        walk(absolute, relative);
+      } else {
+        let size = 0;
+        try { size = statSync(absolute).size; } catch { /* A vanished entry still counts. */ }
+        bytes += size;
+        rows.push(`${relative} (${size} bytes)`);
+      }
+    }
+  };
+  let containsGit = false;
+  walk(safe, '');
+  rows.sort();
+  return { paths: rows, count, bytes, truncated, containsGit, sha256: digest(Buffer.from(rows.join('\n'), 'utf8')) };
+}
+
 /** Read a bounded, non-sensitive file under the approved workspace root. */
 export function readDirectFile(candidate: string, sandbox: SandboxOptions): { target: string; content: string; bytes: number; sha256: string } {
   const target = safeDirectTarget(candidate, sandbox);
@@ -80,6 +149,26 @@ export function readDirectFile(candidate: string, sandbox: SandboxOptions): { ta
 export function planDirectFileAction(candidate: string, sandbox: SandboxOptions, action: DirectFileAction, content?: string): DirectFilePlan {
   const target = safeDirectTarget(candidate, sandbox);
   const present = existsSync(target);
+  const isDirectory = present && statSync(target).isDirectory();
+
+  if (isDirectoryAction(action)) {
+    if (action === 'create_directory') {
+      if (present) throw new FileToolError('a directory or file with that name already exists; creation will not overwrite it');
+      const parent = path.dirname(target);
+      if (existsSync(parent) && !statSync(parent).isDirectory()) throw new FileToolError('parent path is not a directory');
+      return { action, target, beforeSha256: null, createParent: !existsSync(parent) };
+    }
+    if (!present) throw new FileToolError('directory does not exist');
+    if (!isDirectory) throw new FileToolError('target is a file, not a directory; use the file delete action instead');
+    const manifest = inspectDirectoryManifest(target, sandbox);
+    if (manifest.truncated) throw new FileToolError(`that directory holds more than ${MAX_DIRECTORY_ENTRIES} entries; Astra will not propose a recursive delete of it`);
+    return {
+      action, target, beforeSha256: manifest.sha256, createParent: false,
+      entries: manifest.paths, entryCount: manifest.count, containsGit: manifest.containsGit,
+    };
+  }
+
+  if (isDirectory) throw new FileToolError('target is a directory; use the directory action instead of writing a file');
   if (action === 'create' && present) throw new FileToolError('file already exists; creation will not overwrite it');
   if ((action === 'edit' || action === 'delete') && !present) throw new FileToolError('file does not exist');
   if (action !== 'delete' && (typeof content !== 'string' || !content.length)) throw new FileToolError('exact file content is required before a write can be proposed');
@@ -94,6 +183,33 @@ export function planDirectFileAction(candidate: string, sandbox: SandboxOptions,
 export function executeDirectFileAction(plan: DirectFilePlan, sandbox: SandboxOptions, io: DirectFileIO = {}): { action: DirectFileAction; target: string; bytes: number; sha256: string | null } {
   const target = safeDirectTarget(plan.target, sandbox);
   if (target !== plan.target) throw new FileToolError('file target changed since approval');
+
+  if (isDirectoryAction(plan.action)) {
+    const present = existsSync(target);
+    if (plan.action === 'create_directory') {
+      if (present) throw new FileToolError('a directory or file with that name already exists');
+      const parent = path.dirname(target);
+      if (!existsSync(parent)) {
+        if (!plan.createParent) throw new FileToolError('parent directory is missing; request a fresh plan');
+        try { if (io.mkdir) io.mkdir(parent); else mkdirSync(parent, { recursive: true }); } catch (error) { fileFailure(error, 'create directory'); }
+      }
+      safeDirectTarget(target, sandbox); // Re-check after creating the parent.
+      try { if (io.mkdir) io.mkdir(target); else mkdirSync(target); } catch (error) { fileFailure(error, 'create directory'); }
+      if (!existsSync(target) || !statSync(target).isDirectory()) throw new FileToolError('create verification failed: directory is not present on disk');
+      return { action: plan.action, target, bytes: 0, sha256: null };
+    }
+    if (!present) throw new FileToolError('directory does not exist');
+    if (!statSync(target).isDirectory()) throw new FileToolError('target is no longer a directory');
+    // The manifest is re-read immediately before removal: a folder that gained
+    // or lost anything since Karl approved is refused, not deleted.
+    const manifest = inspectDirectoryManifest(target, sandbox);
+    if (manifest.truncated) throw new FileToolError(`that directory now holds more than ${MAX_DIRECTORY_ENTRIES} entries; request a fresh plan`);
+    if (manifest.sha256 !== plan.beforeSha256) throw new FileToolError('directory changed since planning; request a fresh plan');
+    try { if (io.remove) io.remove(target, { recursive: true }); else rmSync(target, { recursive: true }); } catch (error) { fileFailure(error, 'delete directory'); }
+    if (existsSync(target)) throw new FileToolError('delete verification failed: directory remains on disk');
+    return { action: plan.action, target, bytes: manifest.bytes, sha256: null };
+  }
+
   const current = existsSync(target) ? digest(readDirectBytes(target)) : null;
   if (current !== plan.beforeSha256) throw new FileToolError('file changed since planning; request a fresh plan');
   if (plan.action === 'create' && current !== null) throw new FileToolError('file already exists');

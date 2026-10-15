@@ -75,8 +75,11 @@ export class ChatService {
       if (event.kind === 'task.completed') {
         if (snapshot.plan?.fileOperation) {
           const operation = snapshot.plan.fileOperation;
-          this.history.push({ role: 'assistant', content: `${operation.action === 'delete' ? 'Deleted' : operation.action === 'create' ? 'Created' : operation.action === 'edit' ? 'Edited' : 'Wrote'} and verified ${operation.target} on disk. ${operation.action === 'delete' ? 'The file is absent.' : `The file contains the exact approved content (${Buffer.byteLength(operation.content ?? '', 'utf8')} bytes).`} No Git repository or remote was created.` });
-          return;
+          const done = describeVerifiedFileOperation(operation);
+          if (done) {
+            this.history.push({ role: 'assistant', content: done });
+            return;
+          }
         }
         const last = snapshot.testResults.at(-1);
         this.history.push({ role: 'assistant', content: `Coding task #${snapshot.taskId} completed in ${snapshot.repository}. ${last ? `${snapshot.testResults.filter((result) => result.ok).length}/${snapshot.testResults.length} approved checks passed. ` : 'No executable checks were run. '}${snapshot.diff ? `Git diff: ${snapshot.diff.filesChanged} file(s), +${snapshot.diff.insertions}/-${snapshot.diff.deletions}.` : 'No Git diff was available.'} Review the full diff in Coding.` });
@@ -360,6 +363,35 @@ function memoryPromptBlock(memory: MemoryChatPort, query: string): string {
   }
   if (lines.length === 0) return 'Karl has not saved any personal memory yet. Never invent a memory about him.';
   return `${lines.join('\n')}\nIf a question is about Karl personally and nothing here answers it, say you do not remember rather than guessing.`;
+}
+
+/**
+ * Report a completed direct operation in the past tense, from the plan.
+ *
+ * Only says what the verified operation actually was: a directory operation is
+ * never described as a file, and a recursive delete reports the count of
+ * entries that were listed and confirmed absent.
+ */
+function describeVerifiedFileOperation(operation: {
+  action: string;
+  target: string;
+  content?: string;
+  entryCount?: number;
+}): string | null {
+  switch (operation.action) {
+    case 'create_directory':
+      return `Created and verified the empty directory ${operation.target} on disk. No file was written and no Git repository or remote was created.`;
+    case 'delete_directory':
+      return `Deleted and verified ${operation.target} on disk. It and the ${operation.entryCount ?? 0} listed entr${operation.entryCount === 1 ? 'y' : 'ies'} are absent. This was a recursive deletion of a directory that was listed before approval.`;
+    case 'delete':
+      return `Deleted and verified ${operation.target} on disk. The file is absent.`;
+    case 'create':
+      return `Created and verified ${operation.target} on disk. The file contains the exact approved content (${Buffer.byteLength(operation.content ?? '', 'utf8')} bytes). No Git repository or remote was created.`;
+    case 'edit':
+      return `Edited and verified ${operation.target} on disk. The file contains the exact approved content (${Buffer.byteLength(operation.content ?? '', 'utf8')} bytes). No Git repository or remote was created.`;
+    default:
+      return `Wrote and verified ${operation.target} on disk. The file contains the exact approved content (${Buffer.byteLength(operation.content ?? '', 'utf8')} bytes). No Git repository or remote was created.`;
+  }
 }
 
 function describeMemoryAction(action: MemoryCommandResult['action']): string {

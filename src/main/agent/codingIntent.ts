@@ -31,6 +31,8 @@ export type CodingIntentKind =
   | 'write_file'
   | 'edit_file'
   | 'delete_file'
+  | 'create_directory'
+  | 'delete_directory'
   | 'run_tests'
   | 'show_changes'
   | 'check_path'
@@ -63,6 +65,7 @@ const MUTATING: ReadonlySet<CodingIntentKind> = new Set<CodingIntentKind>([
   'add_feature',
   'create_repository',
   'create_file', 'write_file', 'edit_file', 'delete_file',
+  'create_directory', 'delete_directory',
   'run_tests',
 ]);
 
@@ -138,6 +141,14 @@ const PROJECT_EXISTENCE_CLAIM = new RegExp(
  */
 const FILE_SUBJECT = /\bfile\b|\b[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8}\b/i;
 
+/**
+ * A standalone directory noun.
+ *
+ * The lookarounds stop it matching inside a hyphenated path component, so
+ * `C:\repos\plain-folder\AstraBackstory.js` remains a *file* request.
+ */
+const DIRECTORY_NOUN = '(?<![\\w-])(?:folder|directory|dir)(?![\\w-])';
+
 const RULES: readonly Rule[] = [
   { kind: 'cancel_task', pattern: /\b(cancel|stop|abort|halt)\b.*\b(task|job|work)\b|\bcancel (the |current )?(task|everything)\b/i },
   // Checked before the question guard below, so "stop what you're doing" is
@@ -185,6 +196,14 @@ const RULES: readonly Rule[] = [
   // demoted to a read-only listing just because it says "my repositories".
   { kind: 'list_repositories', pattern: /\b(list|show|what are)\b.*\b(repositor(y|ies)|projects)\b|\bmy repositor/i, blockedBy: CREATION_FRAME },
   { kind: 'run_tests', pattern: /\b(run|execute)\b.*\b(test|tests|test suite|npm test)\b/i },
+  // Directories have their own actions. These must be matched before the file
+  // and repository rules: "create a folder called X" is a plain directory, not a
+  // scaffolded project and not a file.
+  //
+  // The lookarounds stop the noun matching inside a hyphenated path component,
+  // so `C:\repos\plain-folder\AstraBackstory.js` stays a *file* request.
+  { kind: 'delete_directory', pattern: new RegExp(String.raw`\b(?:delete|remove|get rid of|clear out)\b.*\b${DIRECTORY_NOUN}\b`, 'i') },
+  { kind: 'create_directory', pattern: new RegExp(String.raw`\b(?:create|make|add|new|mkdir)\b.*\b${DIRECTORY_NOUN}\b`, 'i') },
   { kind: 'delete_file', pattern: /\b(delete|remove)\b.*(?:\bfile\b|\.[A-Za-z0-9]{1,8}\b)/i },
   { kind: 'edit_file', pattern: /\b(edit|update|change|replace)\b.*(?:\bfile\b|\bcontents?\b|\bfunction\b|\.[A-Za-z0-9]{1,8}\b)/i },
   { kind: 'read_file', pattern: /\b(read|show|display)\b.*(?:\bfile\b|\.[A-Za-z0-9]{1,8}\b)/i },
@@ -195,7 +214,12 @@ const RULES: readonly Rule[] = [
   // earlier defect: the noun list stopped at "site", so "create a blog called
   // X" matched no rule at all, became chitchat, and was handed to the chat
   // model — which invented the repository, its path and its URL.
-  { kind: 'create_repository', pattern: /\b(create|make|start|scaffold|set up|new|generate|bootstrap|initialise|initialize)\b.*\b(repo(?:sitory|sitories)?|project|app|application|dashboard|service|site|website|blog|folder|directory)\b/i },
+  //
+  // `folder` and `directory` are deliberately absent: they are handled by the
+  // directory actions above. Listing them here used to send "create a folder"
+  // into the project scaffolder, which proposes a whole repository for what
+  // should have been a single empty directory.
+  { kind: 'create_repository', pattern: /\b(create|make|start|scaffold|set up|new|generate|bootstrap|initialise|initialize)\b.*\b(repo(?:sitory|sitories)?|project|app|application|dashboard|service|site|website|blog)\b/i },
   { kind: 'create_repository', pattern: /\bi\s+(?:want|need|would like|am looking for)\b.*\b(?:repo(?:sitory|sitories)?|project|app|application|dashboard|service|site|website|blog|folder|directory)\b/i },
   // "create a new repository called X" also matches, but only after the more
   // specific "called/named X" form below has had a chance to run.
@@ -301,19 +325,66 @@ export function sanitiseSearchTerm(raw: string): string | null {
   return term;
 }
 
-/** Name a new repository should be created under, if one is stated. */
+/**
+ * Name a new repository or directory should be created under, if one is stated.
+ *
+ * The capture runs to a clause boundary rather than stopping at the first
+ * punctuation: an apostrophe is part of the name, not the end of it. Truncating
+ * "Astra's Blog" to "Astra" would silently drop half of what Karl asked for and
+ * propose a different project than the one he named.
+ */
 export function extractNewRepositoryName(text: string): string | null {
-  const patterns = [
-    /\b(?:called|named)\s+["'`]?([A-Za-z][A-Za-z0-9_.-]{1,40})["'`]?/i,
-  ];
-  for (const pattern of patterns) {
-    const match = pattern.exec(text);
-    if (!match) continue;
-    const candidate = match[1].replace(/[.,!?;:]+$/, '');
-    if (candidate.length < 2) continue;
-    return candidate;
-  }
-  return null;
+  const match = /\b(?:called|named)\s+([^"`\n]{2,60}?)(?=\s+(?:inside|under|in|within|with|using|that|which|stored|inside of)\b|[?.!]|$)/i.exec(text);
+  if (!match) return null;
+  const candidate = match[1].replace(/^["'`]+|["'`]+$/g, '').trim();
+  return candidate.length >= 2 ? candidate : null;
+}
+
+/**
+ * Articles that must not become part of a directory name.
+ *
+ * Deliberately minimal: only true determiners are dropped. Keeping "my" and
+ * "new" means "My Blog" folds to `MyBlog` rather than losing half the name,
+ * which is what Karl asked for when he said names should join up.
+ */
+const NAME_NOISE = new Set(['a', 'an', 'the']);
+
+/** Windows reserved device names, refused whatever the case. */
+const RESERVED_DEVICE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+/**
+ * Fold a spoken or written name into one safe directory name.
+ *
+ * Karl asked that names be *joined up* rather than loosened: "Astra's Blog"
+ * becomes `AstrasBlog`, "my blog" becomes `MyBlog`. An apostrophe joins instead
+ * of separating, so "Astra's" yields "Astras" rather than a stray "S".
+ *
+ * This deliberately keeps the existing safety posture instead of widening it:
+ * the result still contains only letters and digits, still starts with a
+ * letter, is still length-bounded, and is still refused if it would collide
+ * with a Windows device name. No separator, traversal or reserved name can
+ * survive, because none of them can appear in the output.
+ */
+export function normaliseDirectoryName(raw: string): string | null {
+  const parts = raw
+    // Apostrophes join rather than split: "Astra's" must not become "Astra S".
+    .replace(/['’‘`]/g, '')
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .filter((part) => !NAME_NOISE.has(part.toLowerCase()))
+    .map((part) => part[0].toUpperCase() + part.slice(1));
+  const name = parts.join('');
+  if (name.length < 2 || name.length > 40) return null;
+  if (!/^[A-Za-z][A-Za-z0-9]*$/.test(name)) return null;
+  if (RESERVED_DEVICE.test(name)) return null;
+  return name;
+}
+
+/** The name after normalisation, and whether normalisation changed it. */
+export function normalisedName(raw: string): { name: string; changed: boolean } | null {
+  const name = normaliseDirectoryName(raw);
+  if (!name) return null;
+  return { name, changed: name.toLowerCase() !== raw.trim().toLowerCase() };
 }
 
 /**
@@ -371,6 +442,21 @@ function trimPathTail(raw: string, extraWords: string): string {
 }
 
 /**
+ * How much text after a drive letter belongs to the path.
+ *
+ * - `strict`   — stop at the first space. Used for file operations, where the
+ *                message is `verb file <path> [prose]` and trailing prose must
+ *                not be swallowed.
+ * - `sentence` — run to a sentence boundary, trimming only function words.
+ *                Used for directories, whose names may contain a space and
+ *                which are normalised before use.
+ * - `question` — as above plus the trailing question phrase. Used by the
+ *                verification intents, so `… Astra's Blog exist?` resolves to
+ *                the directory Karl actually named.
+ */
+export type PathReadMode = 'strict' | 'sentence' | 'question';
+
+/**
  * Only absolute Windows paths are accepted for direct file operations.
  *
  * An apostrophe is legal in a Windows name and is kept, but an imperative is
@@ -380,21 +466,21 @@ function trimPathTail(raw: string, extraWords: string): string {
  * `C:\repos\Astra's Blog exist?` would truncate to `C:\repos\Astra`, a real path
  * that does not exist and therefore a confident wrong answer.
  */
-export function extractAbsoluteFilePath(text: string, interrogative = false): string | null {
+export function extractAbsoluteFilePath(text: string, mode: PathReadMode = 'strict'): string | null {
   const quoted = /["'`]([A-Za-z]:[\\/][^"'`]+)["'`]/.exec(text)?.[1];
   if (quoted) return quoted.replace(/[.,!?;:]+$/, '') || null;
 
   const start = /[A-Za-z]:[\\/]/.exec(text)?.index;
   if (start === undefined) return null;
 
-  if (!interrogative) {
+  if (mode === 'strict') {
     return /[A-Za-z]:[\\/][^\s"`<>|?*]+/.exec(text.slice(start))?.[0].replace(/[.,!?;:]+$/, '') || null;
   }
 
   // A period only ends the path when it is not a file extension.
   const boundary = /[.!?](?=\s|$)/.exec(text.slice(start));
   const raw = (boundary ? text.slice(start, start + boundary.index) : text.slice(start)).replace(/[,;:]+$/, '');
-  return trimPathTail(raw, PATH_QUESTION_WORDS) || null;
+  return trimPathTail(raw, mode === 'question' ? PATH_QUESTION_WORDS : '') || null;
 }
 
 /**
@@ -539,7 +625,7 @@ function verificationEntities(kind: CodingIntentKind, text: string): Partial<Cod
   if (kind === 'check_path' || kind === 'check_repository') {
     // These intents only exist for questions, so a trailing question phrase
     // may be trimmed from the path.
-    return { path: extractAbsoluteFilePath(text, true) };
+    return { path: extractAbsoluteFilePath(text, 'question') };
   }
   return {};
 }
@@ -560,6 +646,8 @@ function describe(kind: CodingIntentKind, repository: string | null, term: strin
     case 'write_file': return 'Propose writing the named file; approval is required.';
     case 'edit_file': return 'Propose replacing the named file with reviewed content; approval is required.';
     case 'delete_file': return 'Propose deleting the named file; approval is required.';
+    case 'create_directory': return 'Propose creating the named directory; approval is required.';
+    case 'delete_directory': return 'Propose deleting the named directory and everything inside it; approval is required.';
     case 'run_tests': return 'Run the approved test command.';
     case 'show_changes': return 'Show the current Git diff for the selected repository.';
     case 'check_path': return 'Inspect the named path on disk and report only what the filesystem shows.';

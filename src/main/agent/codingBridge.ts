@@ -3,6 +3,7 @@ import {
   extractAbsoluteFilePath,
   extractRepositoryHint,
   extractStackHints,
+  normaliseDirectoryName,
   routeCodingIntent,
   type CodingIntent,
 } from './codingIntent';
@@ -102,6 +103,9 @@ export class CodingBridge {
       case 'edit_file':
       case 'delete_file':
         return this.proposeFileOperation(intent.kind.replace('_file', '') as DirectFileAction, message, cancellation);
+      case 'create_directory':
+      case 'delete_directory':
+        return this.proposeDirectoryOperation(intent.kind === 'create_directory' ? 'create_directory' : 'delete_directory', message, cancellation);
       default:
         return null;
     }
@@ -477,13 +481,19 @@ export class CodingBridge {
     if (['investigating', 'planning', 'awaiting_approval', 'implementing', 'testing', 'reviewing'].includes(this.agent.snapshot().phase)) {
       return { reply: 'A coding task is already in progress. Finish, reject or cancel it before starting another.', handled: true };
     }
-    const name = extractNewRepositoryName(message);
-    if (!name) {
+    const rawName = extractNewRepositoryName(message);
+    if (!rawName) {
       return { reply: 'What should the new repository be called? For example: "create a React and TypeScript dashboard called MyDashboard".', handled: true };
     }
-    if (!/^[A-Za-z][A-Za-z0-9_-]{1,39}$/.test(name) || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i.test(name)) {
-      return { reply: 'That repository name is not a safe Windows directory name. Use letters, digits, underscores or hyphens.', handled: true };
+    // Karl asked that names be joined up rather than loosened, so "Astra's Blog"
+    // is offered as `AstrasBlog`. The safe-name rule is unchanged: only letters
+    // and digits can survive, so no separator or traversal can either.
+    const normalised = normaliseDirectoryName(rawName);
+    if (!normalised) {
+      return { reply: `"${rawName}" cannot be used as a repository name. Astra joins the words into one safe name (for example "Astra's Blog" becomes "AstrasBlog") and refuses Windows device names.`, handled: true };
     }
+    const name = normalised;
+    const renamed = normalised !== rawName ? `- Name as spoken: **${rawName}**, folded to **${normalised}** so it is a single safe directory name` : null;
     const target = path.join(this.sandbox.root, name);
     const stack = extractStackHints(message);
     const scaffold = buildScaffold(name, stack);
@@ -503,6 +513,7 @@ export class CodingBridge {
       `**Proposed new repository**`,
       '',
       `- Path: \`${target}\``,
+      ...(renamed ? [renamed] : []),
       `- Stack: ${stack.length ? stack.join(', ') : 'plain Node.js'}`,
       `- Files that would be created: ${Object.keys(scaffold).join(', ')}`,
       `- Git: initialised locally, with **no** remote created`,
@@ -590,6 +601,103 @@ export class CodingBridge {
       return { reply: lines.join('\n'), handled: true, snapshot };
     } catch (error) {
       return { reply: `I could not propose ${action} for ${target}: ${error instanceof Error ? error.message : String(error)}. No file was changed.`, handled: true };
+    }
+  }
+
+  /**
+   * Resolve the directory a request names, folding the name into one safe form.
+   *
+   * Karl asked that names be joined up rather than loosened: "Astra's Blog"
+   * becomes `AstrasBlog`. Normalisation happens only for creation, where there
+   * is nothing to overwrite and the final component is ours to choose; a
+   * deletion must address the directory that actually exists.
+   */
+  private resolveDirectoryTarget(message: string, action: 'create_directory' | 'delete_directory'): { target: string; renamed?: { from: string; to: string } } | { unresolved: string } {
+    // Read to a sentence boundary: a directory name may contain a space, and
+    // the component is normalised on create anyway. Over-reading fails safely,
+    // because the plan refuses a directory that is not there.
+    const absolute = extractAbsoluteFilePath(message, 'sentence');
+    if (absolute) {
+      const base = path.basename(absolute);
+      if (action === 'delete_directory') return { target: absolute };
+      const name = normaliseDirectoryName(base);
+      if (!name) return { unresolved: `"${base}" cannot be used as a directory name. Astra joins words into one safe name (for example "My Blog" becomes "MyBlog") and refuses Windows device names.` };
+      return {
+        target: path.join(path.dirname(absolute), name),
+        renamed: name === base ? undefined : { from: base, to: name },
+      };
+    }
+
+    const spoken = extractNewRepositoryName(message);
+    if (!spoken) return { unresolved: 'Which directory should Astra use? Give an absolute path under the approved root, or say "create a folder called Name".' };
+    const name = normaliseDirectoryName(spoken);
+    if (!name) return { unresolved: `"${spoken.trim()}" cannot be used as a directory name. Astra joins words into one safe name (for example "Astra's Blog" becomes "AstrasBlog") and refuses Windows device names.` };
+    return {
+      target: path.join(this.sandbox.root, name),
+      renamed: name === spoken.trim() ? undefined : { from: spoken.trim(), to: name },
+    };
+  }
+
+  /**
+   * Propose creating or removing a directory through the ordinary approval path.
+   *
+   * Nothing happens until Karl approves, and a recursive delete shows the exact
+   * manifest of what would go, because it cannot be undone.
+   */
+  private async proposeDirectoryOperation(action: 'create_directory' | 'delete_directory', message: string, cancellation?: AbortSignal): Promise<ChatToolResult> {
+    if (['investigating', 'planning', 'awaiting_approval', 'implementing', 'testing', 'reviewing'].includes(this.agent.snapshot().phase)) {
+      return { reply: 'A coding task is already in progress. Finish, reject or cancel it before starting another.', handled: true };
+    }
+    if (cancellation?.aborted) throw new Error('directory request cancelled');
+
+    const resolved = this.resolveDirectoryTarget(message, action);
+    if ('unresolved' in resolved) return { reply: resolved.unresolved, handled: true };
+
+    try {
+      const operation = planDirectFileAction(resolved.target, this.sandbox, action);
+      const renamed = resolved.renamed
+        ? `Astra folded the name **${resolved.renamed.from}** into **${resolved.renamed.to}**, so it is a single safe directory name.`
+        : null;
+      const lines = action === 'create_directory'
+        ? [
+          '**Proposed directory create**',
+          `- Absolute path: \`${operation.target}\``,
+          `- Parent directory: ${operation.createParent ? 'will be created after approval' : 'exists'}`,
+          '- Contents: the directory is created empty; no file is written',
+          '- Git: none will be created',
+          ...(renamed ? ['', renamed] : []),
+          '',
+          'Nothing has been changed. Approve this exact operation in Coding to create the directory.',
+        ]
+        : [
+          '**Proposed directory delete — this cannot be undone**',
+          `- Absolute path: \`${operation.target}\``,
+          `- Everything inside will be removed: **${operation.entryCount} entr${operation.entryCount === 1 ? 'y' : 'ies'}**`,
+          ...(operation.containsGit ? ['- **This directory contains Git metadata (`.git`). Deleting it removes the repository history.**'] : []),
+          '',
+          'Full listing of what will be removed:',
+          '```',
+          ...(operation.entries ?? []).map((entry) => `  ${entry}`),
+          '```',
+          ...(renamed ? ['', renamed] : []),
+          '',
+          'Nothing has been changed. Approve this exact operation in Coding to delete it, or reject to keep everything.',
+        ];
+      const snapshot = await this.agent.beginTask({
+        objective: message.trim(),
+        fileOperation: operation,
+        proposedFiles: [path.basename(operation.target)],
+        expectedOutcome: operation.action === 'delete_directory'
+          ? `${operation.target} and its ${operation.entryCount} listed entr${operation.entryCount === 1 ? 'y' : 'ies'} are absent after an independent filesystem check.`
+          : `${operation.target} exists as an empty directory after an independent filesystem check.`,
+        rootCause: 'Karl requested a direct directory operation.',
+        risks: [operation.action === 'delete_directory'
+          ? 'Recursive deletion is permanent. Every removed path is listed in this plan for review.'
+          : 'The directory is created after approval; it starts empty.'],
+      });
+      return { reply: lines.join('\n'), handled: true, snapshot };
+    } catch (error) {
+      return { reply: `I could not propose ${action === 'create_directory' ? 'creating' : 'deleting'} a directory at ${resolved.target}: ${error instanceof Error ? error.message : String(error)}. Nothing was changed.`, handled: true };
     }
   }
 

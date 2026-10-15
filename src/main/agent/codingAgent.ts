@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { ApprovalManager, PermissionError } from '../approvals/approvalManager';
 import { TaskStore } from './taskStore';
@@ -14,6 +14,7 @@ import {
   executeDirectFileAction,
   readDirectFile,
   ensureNewRepositoryDirectory,
+  isDirectoryAction,
   type DirectFilePlan,
   type GitDiff,
   type GitResult,
@@ -497,6 +498,13 @@ export class CodingAgent extends EventEmitter {
       }
       if (operation.action === 'delete') {
         if (existsSync(operation.target)) throw new Error('interrupted deletion is incomplete; manual review required');
+      } else if (isDirectoryAction(operation.action)) {
+        const present = existsSync(operation.target);
+        if (operation.action === 'delete_directory') {
+          if (present) throw new Error('interrupted directory deletion is incomplete; manual review required');
+        } else if (!present || !statSync(operation.target).isDirectory()) {
+          throw new Error('interrupted directory creation is incomplete; manual review required');
+        }
       } else {
         const observed = readDirectFile(operation.target, this.sandbox);
         if (observed.content !== operation.content) throw new Error('interrupted file differs from the approved content; manual review required');
@@ -598,7 +606,15 @@ export class CodingAgent extends EventEmitter {
     this.assertApproved();
     if (this.plan?.fileOperation) {
       const operation = this.plan.fileOperation;
-      if (operation.action === 'delete') {
+      if (isDirectoryAction(operation.action)) {
+        // A directory is verified by its presence or absence, never by content.
+        const present = existsSync(operation.target);
+        if (operation.action === 'delete_directory') {
+          if (present) throw new Error('delete verification failed: directory remains on disk');
+        } else if (!present || !statSync(operation.target).isDirectory()) {
+          throw new Error('create verification failed: directory is not present on disk');
+        }
+      } else if (operation.action === 'delete') {
         if (existsSync(operation.target)) throw new Error('delete verification failed: file remains on disk');
       } else if (readDirectFile(operation.target, this.sandbox).content !== operation.content) {
         throw new Error('write verification failed: on-disk content differs');
