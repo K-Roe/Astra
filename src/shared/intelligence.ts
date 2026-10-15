@@ -222,6 +222,7 @@ export interface CodingTaskView {
     readonly investigationNotes: readonly string[];
     readonly patches?: readonly { readonly file: string; readonly hunks: readonly { readonly find: string; readonly replace: string }[] }[];
     readonly newRepository?: { readonly name: string; readonly files: Readonly<Record<string, string>> };
+    readonly fileOperation?: { readonly action: 'create' | 'write' | 'edit' | 'delete'; readonly target: string; readonly content?: string; readonly beforeSha256: string | null; readonly createParent: boolean };
     readonly correctionAttempt?: number;
     readonly branch?: string | null;
   } | null;

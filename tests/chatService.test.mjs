@@ -145,3 +145,14 @@ test('a coding-model proposal can be cancelled without creating a plan', async (
   assert.match(status.messages.at(-1).content, /investigation cancelled/i);
   assert.equal(status.messages.length, 2);
 });
+
+test('Gemma prose cannot report an unverified file creation as completed work', async () => {
+  const fake = mockOllama();
+  const request = (url, init) => new globalThis.URL(url).pathname === '/api/chat'
+    ? Promise.resolve(globalThis.Response.json({ message: { role: 'assistant', content: 'I created the file AstraBackstory.js.' } }))
+    : fake.request(url, init);
+  const service = new ChatService('Astra personality', request);
+  const status = await service.send('Tell me about Astra');
+  assert.match(status.messages.at(-1).content, /I have not created/i);
+  assert.doesNotMatch(status.messages.at(-1).content, /I created the file/i);
+});

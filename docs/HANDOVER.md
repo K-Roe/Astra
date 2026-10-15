@@ -1,5 +1,9 @@
 # Handover for the next AI agent
 
+## Direct file correction (2026-10-15)
+
+Normal chat now routes direct file requests through `CodingBridge` and the existing CA-01 plan and approval engine. `DirectFilePlan` binds action, absolute target, full new content and prior hash; `executeFileOperation` verifies the result before chat confirms success. The generic Coding `writes` argument is blocked because it did not bind content to the approved plan. The exact `astraBlog/AstraBackstory.js` native acceptance passed and left Karl's file in place; do not rerun the creation harness against that occupied target or remove the file. Its screenshots and JSON are under ignored `test-results/direct-file/`. Keep direct actions inside the configured repository root, and require a fresh approval for every mutation. No Git repo was made for this file and no push was made.
+
 ## Conversational coding correction (2026-10-15)
 
 `codingIntent.ts` now catches “repo” creation language and trims sentence punctuation from new repository names. `CodingBridge` uses the existing CA-01 approval path without an existing repository selection; its proposal phase is exposed to `worldActivityFor` for read-only character presentation. `CharacterController` routes planning and approval waiting to the desk, keeps approval waiting in seated idle, and plays the rebuilt V1/V2 keyboard clip only during real approved coding or Learning work. The acceptance-only TEMP repository root override in main requires an isolated acceptance profile and flag. The exact AstraStone chat scenario is `scripts/acceptance-conversational-repository.mjs`; native screenshots are in `docs/review/conversational-coding/`. Keep V1 as fresh-profile default until Karl approves V2 visually. Do not push.

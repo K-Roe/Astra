@@ -1,5 +1,9 @@
 # Project ASTRA decisions
 
+## ADR-033 — Approved direct files use exact plans and disk verification (Implemented, 2026-10-15)
+
+Ordinary chat file requests are classified before Gemma, then handled by the existing main-process CA-01 task and approval path. Read is bounded and read-only; create, replace, edit and delete require an absolute path under the configured repository root and a separate reviewed plan. The plan includes the target, action, full new content where applicable, and the current file hash. Execution checks that hash again and verifies the resulting bytes or absence on disk before reporting completion. Creation can make a missing parent directory under that root but never starts Git. The older renderer-supplied `writes` argument is rejected because its contents were not in the approved plan. The model may describe a proposal, but cannot authorise a file mutation or confirm one without a verified task result.
+
 ## ADR-032 — Runtime memory authority and bounded citation relevance (Implemented, 2026-10-15)
 
 Astra's own memory capability is answered from a successful read of the trusted personal-memory service before model or research routing; availability is never inferred from an empty record list or a website. Ordinary prompts include the same runtime capability and prohibit generated mutation claims. Knowledge FTS5 remains a recall mechanism, but topic overlap is required before passages are injected, and citation markers are retained only when the answer sentence overlaps the selected passage. This is deliberately a bounded lexical guard, not a claim of semantic proof. The existing SQLite memory database and command authority remain unchanged.

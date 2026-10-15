@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { assertNotReservedName, resolveWithinRoot, resolveWithinRootNotRoot, type SandboxOptions } from './pathGuard';
+import { createHash } from 'node:crypto';
+import { assertNotReservedName, isIgnoredDirectory, isSensitiveFile, resolveWithinRoot, resolveWithinRootNotRoot, type SandboxOptions } from './pathGuard';
 
 /**
  * File mutation, patch application and Git inspection.
@@ -19,6 +20,105 @@ export class FileToolError extends Error {
 }
 
 export const MAX_EDIT_FILE_BYTES = 2_000_000;
+
+export type DirectFileAction = 'create' | 'write' | 'edit' | 'delete';
+export interface DirectFilePlan {
+  readonly action: DirectFileAction;
+  readonly target: string;
+  readonly content?: string;
+  /** Hash of the exact bytes at planning time; null means the file was absent. */
+  readonly beforeSha256: string | null;
+  readonly createParent: boolean;
+}
+
+/** Narrow fault-injection seam for permission and readback verification tests. */
+export interface DirectFileIO {
+  readonly write?: (target: string, content: string, flag: 'w' | 'wx') => void;
+  readonly remove?: (target: string) => void;
+}
+
+function safeDirectTarget(candidate: string, sandbox: SandboxOptions): string {
+  if (!path.isAbsolute(candidate)) throw new FileToolError('an absolute file path is required');
+  const target = resolveWithinRootNotRoot(candidate, sandbox);
+  const relative = path.relative(resolveWithinRoot(sandbox.root, sandbox), target);
+  for (const part of relative.split(path.sep)) {
+    assertNotReservedName(part);
+    if (isSensitiveFile(part.toLowerCase()) || isIgnoredDirectory(part.toLowerCase())) throw new FileToolError('access to that file or directory is not permitted');
+  }
+  return target;
+}
+
+function fileFailure(error: unknown, action: string): never {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  if (code === 'EACCES' || code === 'EPERM') throw new FileToolError(`${action} failed: filesystem permission denied`);
+  if (code === 'ENOENT') throw new FileToolError(`${action} failed: directory or file does not exist`);
+  if (code === 'ENOTDIR') throw new FileToolError(`${action} failed: a path component is not a directory`);
+  throw error;
+}
+
+function readDirectBytes(target: string): Buffer {
+  try {
+    const info = statSync(target);
+    if (!info.isFile()) throw new FileToolError('target is not a regular file');
+    if (info.size > MAX_EDIT_FILE_BYTES) throw new FileToolError('file is too large for a direct file operation');
+    return readFileSync(target);
+  } catch (error) { return fileFailure(error, 'read'); }
+}
+
+const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+
+/** Read a bounded, non-sensitive file under the approved workspace root. */
+export function readDirectFile(candidate: string, sandbox: SandboxOptions): { target: string; content: string; bytes: number; sha256: string } {
+  const target = safeDirectTarget(candidate, sandbox);
+  const bytes = readDirectBytes(target);
+  return { target, content: bytes.toString('utf8'), bytes: bytes.length, sha256: digest(bytes) };
+}
+
+/** Produce the exact file operation that Karl will review before approval. */
+export function planDirectFileAction(candidate: string, sandbox: SandboxOptions, action: DirectFileAction, content?: string): DirectFilePlan {
+  const target = safeDirectTarget(candidate, sandbox);
+  const present = existsSync(target);
+  if (action === 'create' && present) throw new FileToolError('file already exists; creation will not overwrite it');
+  if ((action === 'edit' || action === 'delete') && !present) throw new FileToolError('file does not exist');
+  if (action !== 'delete' && (typeof content !== 'string' || !content.length)) throw new FileToolError('exact file content is required before a write can be proposed');
+  if (content && Buffer.byteLength(content, 'utf8') > MAX_EDIT_FILE_BYTES) throw new FileToolError('proposed file content is too large');
+  const beforeSha256 = present ? digest(readDirectBytes(target)) : null;
+  const parent = path.dirname(target);
+  if (existsSync(parent) && !statSync(parent).isDirectory()) throw new FileToolError('parent path is not a directory');
+  return { action, target, ...(action === 'delete' ? {} : { content }), beforeSha256, createParent: !existsSync(parent) };
+}
+
+/** Execute exactly the approved operation, then independently read the result. */
+export function executeDirectFileAction(plan: DirectFilePlan, sandbox: SandboxOptions, io: DirectFileIO = {}): { action: DirectFileAction; target: string; bytes: number; sha256: string | null } {
+  const target = safeDirectTarget(plan.target, sandbox);
+  if (target !== plan.target) throw new FileToolError('file target changed since approval');
+  const current = existsSync(target) ? digest(readDirectBytes(target)) : null;
+  if (current !== plan.beforeSha256) throw new FileToolError('file changed since planning; request a fresh plan');
+  if (plan.action === 'create' && current !== null) throw new FileToolError('file already exists');
+  if (plan.action === 'edit' && current === null) throw new FileToolError('file does not exist');
+  if (plan.action === 'delete') {
+    if (current === null) throw new FileToolError('file does not exist');
+    try { if (io.remove) io.remove(target); else rmSync(target); } catch (error) { fileFailure(error, 'delete'); }
+    if (existsSync(target)) throw new FileToolError('delete verification failed: file remains on disk');
+    return { action: plan.action, target, bytes: 0, sha256: null };
+  }
+  if (typeof plan.content !== 'string' || !plan.content.length) throw new FileToolError('approved content is missing');
+  const parent = path.dirname(target);
+  if (!existsSync(parent)) {
+    if (!plan.createParent) throw new FileToolError('parent directory is missing; request a fresh plan');
+    try { mkdirSync(parent, { recursive: true }); } catch (error) { fileFailure(error, 'create directory'); }
+  }
+  safeDirectTarget(target, sandbox); // Re-check after creating the parent.
+  try {
+    if (io.write) io.write(target, plan.content, current === null ? 'wx' : 'w');
+    else writeFileSync(target, plan.content, { encoding: 'utf8', flag: current === null ? 'wx' : 'w' });
+  }
+  catch (error) { fileFailure(error, 'write'); }
+  const observed = readDirectBytes(target);
+  const expected = Buffer.from(plan.content, 'utf8');
+  if (!observed.equals(expected)) throw new FileToolError('write verification failed: on-disk content differs');
+  return { action: plan.action, target, bytes: observed.length, sha256: digest(observed) };
+}
 
 export interface WriteResult {
   readonly relativePath: string;

@@ -1,5 +1,9 @@
 # Project ASTRA architecture
 
+## 2026-10-15 direct file correction
+
+The normal chat composer passes file intents through `ChatService` to `CodingBridge`. `codingIntent.ts` extracts an absolute file path; the bridge reads through `readDirectFile` or builds an exact `DirectFilePlan` in main. `CodingAgent.beginTask` shows that plan in chat and Coding, and `executeApproved` calls `executeFileOperation` only after Karl approves the same scope. `fileTools.ts` confines the target to the configured root, checks the pre-operation hash, performs the action and reads back the result before emitting `file.verified`. This also works in a plain directory with no selected Git repository. The prior generic Coding IPC cannot supply unreviewed write content. Gemma only receives unmatched conversation and cannot grant filesystem authority.
+
 ## 2026-10-15 conversational coding correction
 
 The normal composer still calls trusted `ChatService` IPC. Deterministic `codingIntent.ts` routes new-repository requests, including “repo” phrasing, to `CodingBridge`; it does not grant authority. `CodingAgent` creates a scoped plan without a selected repository, and only explicit approval reaches `IntelligenceService.executeApproved` for contained file creation and local Git initialisation. The acceptance-only repository root override is guarded by the acceptance flag, disposable profile and TEMP containment. A genuine in-flight coding proposal sets a transient investigation phase; `App` polls the same task snapshot and gives the read-only activity to the one world controller. This presentation path cannot approve or execute work.

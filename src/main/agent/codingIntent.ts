@@ -26,6 +26,11 @@ export type CodingIntentKind =
   | 'fix_bug'
   | 'add_feature'
   | 'create_repository'
+  | 'read_file'
+  | 'create_file'
+  | 'write_file'
+  | 'edit_file'
+  | 'delete_file'
   | 'run_tests'
   | 'show_changes'
   | 'cancel_task'
@@ -50,6 +55,7 @@ const MUTATING: ReadonlySet<CodingIntentKind> = new Set<CodingIntentKind>([
   'fix_bug',
   'add_feature',
   'create_repository',
+  'create_file', 'write_file', 'edit_file', 'delete_file',
   'run_tests',
 ]);
 
@@ -90,6 +96,12 @@ const RULES: readonly Rule[] = [
   { kind: 'show_changes', pattern: /\b(show|display|see)\b.*\b(what you changed|your changes|diff|changes)\b|\bgit diff\b|\bshow me the diff\b/i },
   { kind: 'list_repositories', pattern: /\b(list|show|what are)\b.*\b(repositor(y|ies)|projects)\b|\bmy repositor/i },
   { kind: 'run_tests', pattern: /\b(run|execute)\b.*\b(test|tests|test suite|npm test)\b/i },
+  { kind: 'delete_file', pattern: /\b(delete|remove)\b.*(?:\bfile\b|\.[A-Za-z0-9]{1,8}\b)/i },
+  { kind: 'edit_file', pattern: /\b(edit|update|change|replace)\b.*(?:\bfile\b|\.[A-Za-z0-9]{1,8}\b)/i },
+  { kind: 'read_file', pattern: /\b(read|show|display)\b.*(?:\bfile\b|\.[A-Za-z0-9]{1,8}\b)/i },
+  { kind: 'read_file', pattern: /\b(?:does|is)\b.*\bfile\b.*\b(?:exist|there|present)\b/i },
+  { kind: 'create_file', pattern: /\b(create|make|add)\b.*(?:\bfile\b|\.[A-Za-z0-9]{1,8}\b)/i },
+  { kind: 'write_file', pattern: /\b(write|save)\b.*(?:\bfile\b|\.[A-Za-z0-9]{1,8}\b)/i },
   { kind: 'create_repository', pattern: /\b(create|make|start|scaffold|set up|new)\b.*\b(repo(?:sitory|sitories)?|project|app|application|dashboard|service|site)\b/i },
   // "create a new repository called X" also matches, but only after the more
   // specific "called/named X" form below has had a chance to run.
@@ -206,6 +218,13 @@ export function extractNewRepositoryName(text: string): string | null {
   return null;
 }
 
+/** Only absolute Windows paths are accepted for direct file operations. */
+export function extractAbsoluteFilePath(text: string): string | null {
+  const quoted = /["'`]([A-Za-z]:[\\/][^"'`]+)["'`]/.exec(text)?.[1];
+  const raw = quoted ?? /[A-Za-z]:[\\/][^\s"'`<>|?*]+/.exec(text)?.[0];
+  return raw?.replace(/[.,!?;:]+$/, '') ?? null;
+}
+
 /** Technology keywords that inform a scaffold proposal (never an install). */
 export function extractStackHints(text: string): readonly string[] {
   const hints: string[] = [];
@@ -283,6 +302,11 @@ function describe(kind: CodingIntentKind, repository: string | null, term: strin
     case 'fix_bug': return `Investigate and propose a fix${where}; changes need approval.`;
     case 'add_feature': return `Propose adding the requested feature${where}; changes need approval.`;
     case 'create_repository': return 'Propose creating a new repository inside the approved root.';
+    case 'read_file': return 'Read the named file inside the approved root.';
+    case 'create_file': return 'Propose creating the named file; approval is required.';
+    case 'write_file': return 'Propose writing the named file; approval is required.';
+    case 'edit_file': return 'Propose replacing the named file with reviewed content; approval is required.';
+    case 'delete_file': return 'Propose deleting the named file; approval is required.';
     case 'run_tests': return 'Run the approved test command.';
     case 'show_changes': return 'Show the current Git diff for the selected repository.';
     case 'cancel_task': return 'Cancel the current coding task and stop further tool actions.';

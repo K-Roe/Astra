@@ -1,5 +1,6 @@
 import {
   extractNewRepositoryName,
+  extractAbsoluteFilePath,
   extractRepositoryHint,
   extractStackHints,
   routeCodingIntent,
@@ -12,6 +13,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { proposeCodingPatch, type ModelProposal } from './codingModel';
 import { gitStatus } from '../workspace/fileTools';
+import { planDirectFileAction, readDirectFile, type DirectFileAction } from '../workspace/fileTools';
 import { PRELIMINARY_CODING_RELIABILITY, routeTask } from '../models/codingBenchmark';
 
 /**
@@ -85,6 +87,13 @@ export class CodingBridge {
         return this.runTests();
       case 'create_repository':
         return this.proposeNewRepository(message);
+      case 'read_file':
+        return this.readFile(message);
+      case 'create_file':
+      case 'write_file':
+      case 'edit_file':
+      case 'delete_file':
+        return this.proposeFileOperation(intent.kind.replace('_file', '') as DirectFileAction, message);
       default:
         return null;
     }
@@ -379,6 +388,55 @@ export class CodingBridge {
       risks: ['Dependencies are declared but not installed. Install and build remain unverified until separately approved.'],
     });
     return { reply: lines.join('\n'), handled: true, snapshot };
+  }
+
+  private readFile(message: string): ChatToolResult {
+    const target = extractAbsoluteFilePath(message);
+    if (!target) return { reply: 'Which absolute file path under the approved repository root should I read?', handled: true };
+    try {
+      const result = readDirectFile(target, this.sandbox);
+      const excerpt = result.content.slice(0, 6000);
+      return { reply: `Read ${result.target} from disk (${result.bytes} bytes, SHA-256 ${result.sha256}).${excerpt.length < result.content.length ? ' Showing the first 6,000 characters.' : ''}\n\n\`\`\`\n${excerpt}\n\`\`\``, handled: true };
+    } catch (error) {
+      return { reply: `I could not read ${target}: ${error instanceof Error ? error.message : String(error)}. No file was changed.`, handled: true };
+    }
+  }
+
+  private async proposeFileOperation(action: DirectFileAction, message: string): Promise<ChatToolResult> {
+    if (['investigating', 'planning', 'awaiting_approval', 'implementing', 'testing', 'reviewing'].includes(this.agent.snapshot().phase)) {
+      return { reply: 'A coding task is already in progress. Finish, reject or cancel it before starting another.', handled: true };
+    }
+    const target = extractAbsoluteFilePath(message);
+    if (!target) return { reply: 'Which absolute file path under the approved repository root should I use?', handled: true };
+    const fenced = /```(?:[A-Za-z0-9_+-]+)?\r?\n([\s\S]*?)\r?\n```/.exec(message);
+    const content = fenced ? `${fenced[1]}\n` : undefined;
+    if (action !== 'delete' && !content) {
+      return { reply: `What exact content should I put in ${target}? Paste it in a fenced code block. I will show the full file and path for approval before writing anything.`, handled: true };
+    }
+    try {
+      const operation = planDirectFileAction(target, this.sandbox, action, content);
+      const snapshot = await this.agent.beginTask({
+        objective: message.trim(),
+        fileOperation: operation,
+        proposedFiles: [path.basename(operation.target)],
+        expectedOutcome: `${operation.target} is ${action === 'delete' ? 'absent' : 'present with exactly the approved content'} after an independent filesystem check.`,
+        rootCause: 'Karl requested a direct file operation.',
+        risks: [action === 'delete' ? 'Deletion removes the current file after approval.' : 'The exact reviewed content will be written only after approval.'],
+      });
+      const lines = [
+        `**Proposed file ${action}**`,
+        `- Absolute path: \`${operation.target}\``,
+        `- Parent directory: ${operation.createParent ? 'will be created after approval' : 'exists'}`,
+        `- Existing file: ${operation.beforeSha256 ? `yes (SHA-256 ${operation.beforeSha256})` : 'no'}`,
+        `- Git repository: none will be created`,
+        ...(content ? ['', 'Full proposed content:', `\`\`\`\n${content}\`\`\``] : []),
+        '',
+        'Nothing has been changed. Review this exact operation in Coding and approve or reject it.',
+      ];
+      return { reply: lines.join('\n'), handled: true, snapshot };
+    } catch (error) {
+      return { reply: `I could not propose ${action} for ${target}: ${error instanceof Error ? error.message : String(error)}. No file was changed.`, handled: true };
+    }
   }
 
   // --------------------------------------------------------------- helpers

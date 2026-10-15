@@ -568,6 +568,8 @@ export class IntelligenceService implements IntelligenceBridge {
       // The exact prior edit/scaffold is on disk; tests still need fresh approval.
     } else if (plan.newRepository) {
       await agent.createRepository(plan.newRepository);
+    } else if (plan.fileOperation) {
+      agent.executeFileOperation();
     } else if (plan.patches?.length) {
       if (plan.branch) await agent.createTaskBranch();
       await agent.implement({ patches: plan.patches });

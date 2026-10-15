@@ -73,6 +73,11 @@ export class ChatService {
   ) {
     this.coding?.onActivity((event, snapshot) => {
       if (event.kind === 'task.completed') {
+        if (snapshot.plan?.fileOperation) {
+          const operation = snapshot.plan.fileOperation;
+          this.history.push({ role: 'assistant', content: `${operation.action === 'delete' ? 'Deleted' : operation.action === 'create' ? 'Created' : operation.action === 'edit' ? 'Edited' : 'Wrote'} and verified ${operation.target} on disk. ${operation.action === 'delete' ? 'The file is absent.' : `The file contains the exact approved content (${Buffer.byteLength(operation.content ?? '', 'utf8')} bytes).`} No Git repository or remote was created.` });
+          return;
+        }
         const last = snapshot.testResults.at(-1);
         this.history.push({ role: 'assistant', content: `Coding task #${snapshot.taskId} completed in ${snapshot.repository}. ${last ? `${snapshot.testResults.filter((result) => result.ok).length}/${snapshot.testResults.length} approved checks passed. ` : 'No executable checks were run. '}${snapshot.diff ? `Git diff: ${snapshot.diff.filesChanged} file(s), +${snapshot.diff.insertions}/-${snapshot.diff.deletions}.` : 'No Git diff was available.'} Review the full diff in Coding.` });
       } else if (event.kind === 'task.failed') {
@@ -248,6 +253,7 @@ export class ChatService {
         memoryBlock,
         guidance,
         'Ordinary conversation cannot take actions or run commands. The separate coding workflow records real tool activity and approvals. Never claim an action occurred unless a recorded tool result confirms it.',
+        this.coding ? 'Runtime capability: scoped repository and file operations are available through the approval-based coding workflow. An action succeeds only after a trusted filesystem result and verification.' : 'Runtime capability: the coding and file service is unavailable.',
       ].filter(Boolean).join('\n\n');
 
       const messages = [
@@ -275,11 +281,16 @@ export class ChatService {
       const cited = extractUsedCitations(raw, grounding);
       const supportedAnswer = raw.replace(/\s*\[(\d{1,2})\]/g, (marker, number: string) => cited.some((line) => line.startsWith(`[${number}]`)) ? marker : '').trim();
       const falseMemoryClaim = containsFalseMemoryAction(supportedAnswer);
-      const answer = falseMemoryClaim
+      const falseFileClaim = containsFalseFileAction(supportedAnswer);
+      const answer = falseFileClaim
+        ? 'I have not created, edited or deleted a file in this reply. Please give me an absolute path under the approved root and exact content in a fenced code block so I can propose a file operation for your approval.'
+        : falseMemoryClaim
         ? 'I have not saved, updated or forgotten a personal memory in this reply. Ask me directly to remember, update or forget something if you want to change stored memory.'
         : cited.length > 0 ? `${supportedAnswer}\n\nSources:\n${cited.join('\n')}` : supportedAnswer;
       this.history.push({ role: 'user', content: text }, { role: 'assistant', content: answer });
-      this.detail = falseMemoryClaim
+      this.detail = falseFileClaim
+        ? 'No filesystem operation was run.'
+        : falseMemoryClaim
         ? 'No personal memory was changed.'
         : grounding.hasKnowledge
         ? `Answered from ${grounding.passages.length} stored source passage(s).`
@@ -375,4 +386,11 @@ function containsFalseMemoryAction(answer: string): boolean {
   return /\b(?:i(?:'ve| have)?|astra has)\s+(?:now\s+)?(?:saved|stored|updated|changed|forgotten|deleted|removed)\s+(?:that|this|your|my|it|a\s+(?:personal\s+)?memory)\b/i.test(answer)
     || /\b(?:saved|stored|updated|forgotten|deleted)\s+(?:to|from|in)\s+(?:my|your|personal)\s+memory\b/i.test(answer)
     || /\bi\s*(?:will|'ll)\s+(?:remember|save|store)\s+(?:that|this|it|your|my)\b/i.test(answer);
+}
+
+/** A generated sentence cannot substitute for a verified filesystem result. */
+function containsFalseFileAction(answer: string): boolean {
+  return /\b(?:i(?:'ve| have)?|astra has)\s+(?:now\s+)?(?:created|written|saved|edited|updated|deleted|removed)\s+(?:the\s+|your\s+|a\s+|this\s+)?(?:file|folder|directory|[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8})\b/i.test(answer)
+    || /\b(?:file|folder|directory)\s+(?:has been|was)\s+(?:created|written|saved|edited|updated|deleted|removed)\b/i.test(answer)
+    || /\b(?:the|your)\s+file\s+(?:now\s+)?exists\b/i.test(answer);
 }

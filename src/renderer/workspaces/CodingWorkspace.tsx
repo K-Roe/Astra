@@ -186,6 +186,7 @@ export function CodingWorkspace({
               </dl>
               {plan.patches?.length ? <details><summary>Proposed patch</summary><pre className="diff-view">{plan.patches.map((patch) => `${patch.file}\n${patch.hunks.map((h) => `- ${h.find}\n+ ${h.replace}`).join('\n')}`).join('\n\n')}</pre></details> : null}
               {plan.newRepository ? <details><summary>Scaffold files</summary><pre className="diff-view">{Object.entries(plan.newRepository.files).map(([file, content]) => `${file}\n${content}`).join('\n\n')}</pre></details> : null}
+              {plan.fileOperation ? <details open><summary>Direct file {plan.fileOperation.action}: {plan.fileOperation.target}</summary><pre className="diff-view">{plan.fileOperation.action === 'delete' ? 'Delete this file after approval.' : plan.fileOperation.content}</pre><p>Parent directory: {plan.fileOperation.createParent ? 'will be created after approval' : 'already exists'}. The result will be read from disk before completion is reported.</p></details> : null}
               {pendingApproval ? (
                 <div className="row-actions">
                   <button type="button" onClick={() => void decide('approve')}>Approve plan</button>

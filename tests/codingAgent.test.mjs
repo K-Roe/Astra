@@ -299,6 +299,19 @@ test('a dirty file with spaces cannot be overwritten through an approved write',
   } finally { cleanup(); }
 });
 
+test('a renderer cannot supply unreviewed file content to an approved coding task', async () => {
+  const { agent, repo, cleanup } = selectedLab();
+  try {
+    await agent.beginTask(plan({ proposedFiles: ['src/surprise.js'] }));
+    agent.approve();
+    await assert.rejects(
+      () => agent.implement({ patches: [], writes: [{ file: 'src/surprise.js', content: 'unreviewed\n' }] }),
+      /exact approved file plan/i,
+    );
+    assert.equal(existsSync(path.join(repo, 'src', 'surprise.js')), false);
+  } finally { cleanup(); }
+});
+
 test('Astra stops if unrelated changes appear underneath her', async () => {
   const { agent, repo, cleanup } = selectedLab();
   try {
@@ -511,6 +524,48 @@ test('a failed check permits one same-scope correction with renewed approval', a
 });
 
 // ------------------------------------------------------------ chat bridge
+
+test('chat file create, read, edit and delete share CA-01 approval and verified execution', async () => {
+  const { agent, root, sandbox, cleanup } = lab();
+  const target = path.join(root, 'plain-folder', 'AstraBackstory.js');
+  const first = 'export const AstraBackstory = { version: 1 };\n';
+  const second = 'export const AstraBackstory = { version: 2 };\n';
+  try {
+    const bridge = new CodingBridge(agent, sandbox);
+    const proposed = await bridge.handle(`Create file ${target} with this content:\n\`\`\`js\n${first.trimEnd()}\n\`\`\``);
+    assert.match(proposed.reply, /Nothing has been changed/);
+    assert.equal(existsSync(target), false);
+    assert.equal(agent.snapshot().phase, 'awaiting_approval');
+    assert.throws(() => agent.executeFileOperation(), /not been approved/);
+    agent.approve();
+    agent.executeFileOperation();
+    await agent.review();
+    await agent.complete();
+    assert.equal(readFileSync(target, 'utf8'), first);
+    assert.equal(existsSync(path.join(path.dirname(target), '.git')), false);
+    assert.match((await bridge.handle(`Read file ${target}`)).reply, /version: 1/);
+
+    await bridge.handle(`Edit file ${target} with this content:\n\`\`\`js\n${second.trimEnd()}\n\`\`\``);
+    assert.equal(readFileSync(target, 'utf8'), first);
+    agent.approve();
+    agent.executeFileOperation();
+    await agent.review();
+    await agent.complete();
+    assert.equal(readFileSync(target, 'utf8'), second);
+
+    await bridge.handle(`Delete file ${target}`);
+    assert.equal(existsSync(target), true);
+    assert.throws(() => agent.executeFileOperation(), /not been approved/);
+    agent.reject('Karl declined deletion');
+    assert.equal(existsSync(target), true);
+    await bridge.handle(`Delete file ${target}`);
+    agent.approve();
+    agent.executeFileOperation();
+    await agent.review();
+    await agent.complete();
+    assert.equal(existsSync(target), false);
+  } finally { cleanup(); }
+});
 
 test('the chat bridge lists repositories and never invokes the model', async () => {
   const { agent, sandbox, cleanup } = lab();

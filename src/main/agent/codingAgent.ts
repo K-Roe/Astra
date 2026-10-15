@@ -11,7 +11,10 @@ import {
   gitStatus,
   runGit,
   writeProjectFile,
+  executeDirectFileAction,
+  readDirectFile,
   ensureNewRepositoryDirectory,
+  type DirectFilePlan,
   type GitDiff,
   type GitResult,
   type GitStatusSummary,
@@ -77,6 +80,7 @@ export interface ProposedPlan {
   readonly investigationNotes: readonly string[];
   readonly patches?: readonly { readonly file: string; readonly hunks: readonly { readonly find: string; readonly replace: string }[] }[];
   readonly newRepository?: { readonly name: string; readonly files: Readonly<Record<string, string>> };
+  readonly fileOperation?: DirectFilePlan;
   readonly correctionAttempt?: number;
   /** Optional task branch to create once approved, so work is isolated. */
   readonly branch?: string | null;
@@ -184,6 +188,7 @@ export class CodingAgent extends EventEmitter {
     notes?: readonly string[];
     branch?: string | null;
     newRepository?: { name: string; path: string; files: Readonly<Record<string, string>> };
+    fileOperation?: DirectFilePlan;
   }): Promise<TaskSnapshot> {
     if (this.taskId && ['investigating', 'planning', 'awaiting_approval', 'implementing', 'testing', 'reviewing'].includes(this.phase)) {
       throw new PermissionError('finish, reject or cancel the current task before starting another');
@@ -191,6 +196,7 @@ export class CodingAgent extends EventEmitter {
     this.reset();
     if (input.repository) this.repository = resolveWithinRoot(input.repository, this.sandbox);
     if (input.newRepository) this.repository = null;
+    if (input.fileOperation) this.repository = path.dirname(resolveWithinRootNotRoot(input.fileOperation.target, this.sandbox));
 
     const task = this.tasks.create({
       repo: this.repository ?? input.newRepository?.path ?? '',
@@ -199,7 +205,7 @@ export class CodingAgent extends EventEmitter {
     this.taskId = task.id;
     this.tasks.transition(task.id, 'investigating');
 
-    if (this.repository) {
+    if (this.repository && !input.fileOperation) {
       this.workingTree = await gitStatus(this.repository, this.sandbox);
       this.baselineStatus = fingerprintStatus(this.workingTree);
       this.baselineDirty = new Set((await gitDirtyPaths(this.repository, this.sandbox)).map(normaliseRelative));
@@ -236,6 +242,7 @@ export class CodingAgent extends EventEmitter {
     notes?: readonly string[];
     branch?: string | null;
     newRepository?: { name: string; path: string; files: Readonly<Record<string, string>> };
+    fileOperation?: DirectFilePlan;
   }): Promise<ProposedPlan> {
     const notes: string[] = [...(input.notes ?? [])];
     // Normalise so "src/sum.js" and "src\\sum.js" are one entry. Without this a
@@ -273,6 +280,13 @@ export class CodingAgent extends EventEmitter {
       notes.push(`Destination check: ${destination} ${available ? 'is available' : 'is NOT available'}.`);
       this.emitEvent('repo.check', `Checked destination availability for ${destination}`, available, available ? undefined : 'destination unavailable');
     }
+    if (input.fileOperation) {
+      const target = resolveWithinRootNotRoot(input.fileOperation.target, this.sandbox);
+      if (target !== input.fileOperation.target || path.dirname(target) !== this.repository) throw new PermissionError('file target differs from the approved directory');
+      files.add(path.basename(target));
+      notes.push(`Direct ${input.fileOperation.action} of ${target}; parent directory ${input.fileOperation.createParent ? 'will be created after approval' : 'exists'}. No Git repository or remote is created.`);
+      this.emitEvent('file.check', `Checked ${target} for a direct file operation`, true);
+    }
 
     const fileList = [...files];
     const commands = input.proposedCommands ?? [];
@@ -287,6 +301,7 @@ export class CodingAgent extends EventEmitter {
       investigationNotes: notes,
       patches: input.proposedPatches,
       newRepository: input.newRepository ? { name: input.newRepository.name, files: input.newRepository.files } : undefined,
+      fileOperation: input.fileOperation,
       branch: input.branch ?? null,
     };
   }
@@ -389,6 +404,9 @@ export class CodingAgent extends EventEmitter {
     for (const file of allowed) {
       if (this.baselineDirty.has(file)) throw new PermissionError(`refusing to overwrite pre-existing work in ${file}`);
     }
+    if (input.writes?.length) {
+      throw new PermissionError('direct writes require an exact approved file plan');
+    }
     for (const patch of input.patches) {
       if (!allowed.has(normaliseRelative(patch.file))) {
         throw new PermissionError(`"${patch.file}" is outside the approved file list`);
@@ -441,12 +459,40 @@ export class CodingAgent extends EventEmitter {
     return this.snapshot();
   }
 
+  /** Apply and verify one exact, approved file operation without requiring Git. */
+  executeFileOperation(): TaskSnapshot {
+    this.assertApproved();
+    const planned = this.plan?.fileOperation;
+    if (!planned) throw new PermissionError('no direct file operation is in the approved plan');
+    this.phase = 'implementing';
+    const result = executeDirectFileAction(planned, this.sandbox);
+    this.tasks.recordChange(this.taskId!, { file: result.target, action: result.action, applied: 1 });
+    this.emitEvent('file.verified', `${result.action} verified on disk: ${result.target} (${result.bytes} bytes)`, true, result.sha256 ?? undefined);
+    return this.snapshot();
+  }
+
   /** After a restart, accept only a fully recognisable approved result. */
   async implementationAlreadyPresent(): Promise<boolean> {
     this.assertApproved();
     if (!this.recoveredWork) return false;
     const plan = this.plan!;
     const changes = this.tasks.get(this.taskId!)?.changes ?? [];
+    if (plan.fileOperation) {
+      const operation = plan.fileOperation;
+      if (changes.length === 0) {
+        this.recoveredWork = false;
+        return false;
+      }
+      if (operation.action === 'delete') {
+        if (existsSync(operation.target)) throw new Error('interrupted deletion is incomplete; manual review required');
+      } else {
+        const observed = readDirectFile(operation.target, this.sandbox);
+        if (observed.content !== operation.content) throw new Error('interrupted file differs from the approved content; manual review required');
+      }
+      this.emitEvent('file.recovery_checked', 'Previously applied file operation was verified on disk.', true);
+      this.recoveredWork = false;
+      return true;
+    }
     if (changes.length === 0) {
       if (!plan.newRepository) {
         const status = await gitStatus(this.requireRepository(), this.sandbox);
@@ -538,6 +584,18 @@ export class CodingAgent extends EventEmitter {
 
   async review(): Promise<TaskSnapshot> {
     this.assertApproved();
+    if (this.plan?.fileOperation) {
+      const operation = this.plan.fileOperation;
+      if (operation.action === 'delete') {
+        if (existsSync(operation.target)) throw new Error('delete verification failed: file remains on disk');
+      } else if (readDirectFile(operation.target, this.sandbox).content !== operation.content) {
+        throw new Error('write verification failed: on-disk content differs');
+      }
+      this.phase = 'reviewing';
+      if (this.taskId) this.tasks.transition(this.taskId, 'reviewing');
+      this.emitEvent('file.reviewed', `Verified ${operation.target} against the approved plan.`, true);
+      return this.snapshot();
+    }
     const repository = this.requireRepository();
     this.phase = 'reviewing';
     if (this.taskId) this.tasks.transition(this.taskId, 'reviewing');
@@ -688,7 +746,7 @@ export class CodingAgent extends EventEmitter {
     }
     this.baselineStatus = null;
     this.phase = task.requiresConfirm ? 'awaiting_approval' : (task.state as CodingPhase);
-    if (this.repository) {
+    if (this.repository && !this.plan?.fileOperation) {
       this.workingTree = await gitStatus(this.repository, this.sandbox).catch(() => null);
     }
     this.emitEvent(
@@ -805,6 +863,7 @@ export function scopeFingerprint(plan: ProposedPlan): string {
     branch: plan.branch ?? null,
     patches: plan.patches ?? null,
     newRepository: plan.newRepository ?? null,
+    fileOperation: plan.fileOperation ?? null,
   });
 }
 
