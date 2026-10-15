@@ -1,15 +1,11 @@
 import path from 'node:path';
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
 import { ApprovalManager, PermissionError } from '../approvals/approvalManager';
 import { TaskStore } from './taskStore';
 import {
   applyPatch,
-  createBranch,
-  gitDiff,
-  gitDirtyPaths,
-  gitStatus,
-  runGit,
   writeProjectFile,
   executeDirectFileAction,
   readDirectFile,
@@ -17,11 +13,10 @@ import {
   isDirectoryAction,
   type DirectFilePlan,
   type GitDiff,
-  type GitResult,
   type GitStatusSummary,
 } from '../workspace/fileTools';
 import { readProjectFile, searchProjectCode } from '../workspace/repoTools';
-import { resolveWithinRoot, resolveWithinRootNotRoot, type SandboxOptions } from '../workspace/pathGuard';
+import { isIgnoredDirectory, isSensitiveFile, resolveWithinRoot, resolveWithinRootNotRoot, type SandboxOptions } from '../workspace/pathGuard';
 import { runApprovedCommand, CommandRejected, type CommandResult } from '../workspace/commandRunner';
 import { MemoryStore } from '../knowledge/memoryStore';
 import { discoverRepositories } from '../workspace/repoTools';
@@ -107,6 +102,9 @@ export interface ProposedPlan {
   readonly rootCause: string;
   readonly investigationNotes: readonly string[];
   readonly patches?: readonly { readonly file: string; readonly hunks: readonly { readonly find: string; readonly replace: string }[] }[];
+  readonly writes?: readonly { readonly file: string; readonly content: string }[];
+  /** Existing-project authority, separate from new-project authority. */
+  readonly workspaceScope?: { readonly root: string; readonly files: readonly string[]; readonly operations: readonly ('patch' | 'create' | 'command')[]; readonly maxWrites: number };
   readonly newRepository?: { readonly name: string; readonly files: Readonly<Record<string, string>> };
   /**
    * A whole-project build approved as one scope.
@@ -116,6 +114,8 @@ export interface ProposedPlan {
    * which is the whole new project directory bounded by a write budget.
    */
   readonly project?: ProjectPlan;
+  /** Completion contract for an existing React workspace. */
+  readonly application?: { readonly root: string; readonly manifest: readonly string[]; readonly launchCommand: string; readonly stack: readonly string[] };
   readonly fileOperation?: DirectFilePlan;
   readonly correctionAttempt?: number;
   /** Optional task branch to create once approved, so work is isolated. */
@@ -180,8 +180,7 @@ export class CodingAgent extends EventEmitter {
   private testResults: TaskSnapshot['testResults'] = [];
   private diff: GitDiff | null = null;
   private workingTree: GitStatusSummary | null = null;
-  private baselineStatus: string | null = null;
-  private baselineDirty = new Set<string>();
+  private fileBaseline = new Map<string, string>();
   private error: string | null = null;
   private interrupted = false;
   private cancellationPending = false;
@@ -218,7 +217,7 @@ export class CodingAgent extends EventEmitter {
     const candidate = path.isAbsolute(nameOrPath) ? nameOrPath : path.resolve(this.sandbox.root, nameOrPath);
     const resolved = resolveWithinRoot(candidate, this.sandbox);
     if (!discoverRepositories(this.sandbox).some((repo) => repo.root.toLowerCase() === resolved.toLowerCase())) {
-      throw new PermissionError('select a discovered Git repository inside the approved root');
+      throw new PermissionError('select a discovered project inside the approved root');
     }
     if (this.taskId && ['investigating', 'planning', 'awaiting_approval', 'implementing', 'testing', 'reviewing', 'paused'].includes(this.phase) && this.repository?.toLowerCase() !== resolved.toLowerCase()) {
       throw new PermissionError('cancel or finish the current task before selecting another repository');
@@ -252,6 +251,7 @@ export class CodingAgent extends EventEmitter {
     proposedFiles?: readonly string[];
     proposedCommands?: readonly { executable: string; args: readonly string[]; purpose: string }[];
     proposedPatches?: readonly { file: string; hunks: readonly { find: string; replace: string }[] }[];
+    proposedWrites?: readonly { file: string; content: string }[];
     expectedOutcome?: string;
     risks?: readonly string[];
     rootCause?: string;
@@ -260,6 +260,7 @@ export class CodingAgent extends EventEmitter {
     newRepository?: { name: string; path: string; files: Readonly<Record<string, string>> };
     fileOperation?: DirectFilePlan;
     project?: ProjectPlan;
+    application?: ProposedPlan['application'];
   }): Promise<TaskSnapshot> {
     if (this.taskId && ['investigating', 'planning', 'awaiting_approval', 'implementing', 'testing', 'reviewing'].includes(this.phase)) {
       throw new PermissionError('finish, reject or cancel the current task before starting another');
@@ -277,18 +278,8 @@ export class CodingAgent extends EventEmitter {
     this.taskId = task.id;
     this.tasks.transition(task.id, 'investigating');
 
-    if (this.repository && !input.fileOperation) {
-      this.workingTree = await gitStatus(this.repository, this.sandbox);
-      this.baselineStatus = fingerprintStatus(this.workingTree);
-      this.baselineDirty = new Set((await gitDirtyPaths(this.repository, this.sandbox)).map(normaliseRelative));
-      const dirty = this.workingTree.staged + this.workingTree.unstaged + this.workingTree.untracked;
-      this.emitEvent('git.status', `Working tree: ${this.workingTree.clean ? 'clean' : `${dirty} pre-existing change(s)`}`, true, this.workingTree.branch ?? undefined);
-      if (!this.workingTree.clean) {
-        this.emitEvent('git.warning', `Pre-existing uncommitted work detected. Astra will not discard it and will only touch files named in the plan.`, true);
-      }
-    }
-
     const plan = await this.investigate(input);
+    if (this.repository && !input.fileOperation) this.captureFileBaseline(plan.filesToChange);
     this.plan = plan;
     this.tasks.setPlan(task.id, plan as unknown as Record<string, unknown>);
     this.tasks.setScope(task.id, { repository: plan.repository, files: plan.filesToChange, commands: plan.commands.map((c) => `${c.executable} ${c.args.join(' ')}`) });
@@ -308,6 +299,7 @@ export class CodingAgent extends EventEmitter {
     proposedFiles?: readonly string[];
     proposedCommands?: readonly { executable: string; args: readonly string[]; purpose: string }[];
     proposedPatches?: readonly { file: string; hunks: readonly { find: string; replace: string }[] }[];
+    proposedWrites?: readonly { file: string; content: string }[];
     expectedOutcome?: string;
     risks?: readonly string[];
     rootCause?: string;
@@ -316,6 +308,7 @@ export class CodingAgent extends EventEmitter {
     newRepository?: { name: string; path: string; files: Readonly<Record<string, string>> };
     fileOperation?: DirectFilePlan;
     project?: ProjectPlan;
+    application?: ProposedPlan['application'];
   }): Promise<ProposedPlan> {
     const notes: string[] = [...(input.notes ?? [])];
     // Normalise so "src/sum.js" and "src\\sum.js" are one entry. Without this a
@@ -323,6 +316,7 @@ export class CodingAgent extends EventEmitter {
     // two files, which then fails the scope check for the second.
     const files = new Set<string>();
     for (const file of input.proposedFiles ?? []) files.add(normaliseRelative(file));
+    for (const write of input.proposedWrites ?? []) files.add(normaliseRelative(write.file));
 
     if (this.repository) {
       const repo = this.repository;
@@ -383,8 +377,22 @@ export class CodingAgent extends EventEmitter {
       rootCause: input.rootCause ?? 'Not yet determined; investigation is required before changing anything.',
       investigationNotes: notes,
       patches: input.proposedPatches,
+      writes: input.proposedWrites,
+      workspaceScope: this.repository && !input.fileOperation
+        ? {
+          root: this.repository,
+          files: fileList,
+          operations: [
+            ...(input.proposedPatches?.length ? ['patch' as const] : []),
+            ...(input.proposedWrites?.length ? ['create' as const] : []),
+            ...(commands.length ? ['command' as const] : []),
+          ],
+          maxWrites: (input.proposedPatches?.length ?? 0) + (input.proposedWrites?.length ?? 0),
+        }
+        : undefined,
       newRepository: input.newRepository ? { name: input.newRepository.name, files: input.newRepository.files } : undefined,
       project: input.project,
+      application: input.application,
       fileOperation: input.fileOperation,
       branch: input.branch ?? null,
     };
@@ -400,6 +408,10 @@ export class CodingAgent extends EventEmitter {
     if (!this.plan || !this.taskId) throw new Error('there is no plan awaiting approval');
     if (this.revokedTasks.has(this.taskId)) throw new PermissionError('this task was cancelled or rejected; a rejected operation can never be approved');
     if (this.tasks.get(this.taskId)?.state !== 'awaiting_approval' || this.interrupted) throw new PermissionError('task is not awaiting a fresh approval');
+    if (this.repository && !this.plan.fileOperation) {
+      if (this.fileBaseline.size === 0) this.captureFileBaseline(this.plan.filesToChange);
+      else this.assertFileBaseline();
+    }
     const fingerprint = scopeFingerprint(this.plan);
     this.tasks.transition(this.taskId, 'awaiting_approval');
     this.approvalRequested = true;
@@ -437,39 +449,15 @@ export class CodingAgent extends EventEmitter {
   // -------------------------------------------------------- implementation
 
   /**
-   * Create the task branch named in the approved plan.
+   * Branching is Git management, and Git is Karl's responsibility.
    *
-   * This is deliberately explicit and opt-in: branching rewrites repository
-   * history position, so it appears in the plan and is covered by the
-   * approval fingerprint. Astra never force-checkouts, rebases or deletes a
-   * branch, and if the branch already exists she stops rather than resetting it.
+   * The method is retained so the call sites and the shared contract stay
+   * intact, but it refuses unconditionally and changes nothing. Nothing in
+   * Astra may create, switch, merge or delete a branch.
    */
   async createTaskBranch(): Promise<TaskSnapshot> {
-    this.assertApproved();
-    const repository = this.requireRepository();
-    const branch = this.plan!.branch;
-    if (!branch) {
-      this.emitEvent('git.branch', 'No task branch was requested; working on the current branch.', true);
-      return this.snapshot();
-    }
-    if (this.baselineStatus !== null) {
-      const current = await gitStatus(repository, this.sandbox);
-      if (fingerprintStatus(current) !== this.baselineStatus) {
-        throw new Error('The working tree changed after the plan; re-investigate before creating a task branch.');
-      }
-    }
-    const result: GitResult = await createBranch(repository, this.sandbox, branch);
-    if (!result.ok) {
-      this.emitEvent('git.branch', `Could not create task branch "${branch}": ${result.stderr.trim() || 'unknown reason'}`, false);
-      this.approvals.record({ actor: 'astra', action: 'git.branch.create', target: branch, result: 'refused', detail: { reason: result.stderr.trim() } });
-      throw new Error(`Approved task branch could not be created: ${result.stderr.trim() || 'unknown reason'}`);
-    }
-    this.workingTree = await gitStatus(repository, this.sandbox);
-    this.emitEvent('git.branch', `Created and switched to task branch "${branch}".`, true);
-    this.approvals.record({ actor: 'astra', action: 'git.branch.create', target: branch });
-    return this.snapshot();
+    throw new PermissionError('Branch operations are unavailable.');
   }
-
   /**
    * Apply the approved plan. Refuses if the working tree gained unrelated
    * modifications, if the plan is unapproved, or if the scope drifted.
@@ -482,24 +470,20 @@ export class CodingAgent extends EventEmitter {
     const repository = this.requireRepository();
     this.phase = 'implementing';
 
-    // Refuse to continue if unrelated changes appeared since the baseline.
-    if (this.repository && this.baselineStatus !== null) {
-      const now = await gitStatus(this.repository, this.sandbox);
-      this.workingTree = now;
-      if (fingerprintStatus(now) !== this.baselineStatus) {
-        throw new Error('The working tree changed underneath this task. Re-investigate before making further edits.');
-      }
-    }
+    this.assertFileBaseline();
 
     const allowed = new Set(this.plan!.filesToChange.map(normaliseRelative));
+    const scope = this.plan!.workspaceScope;
+    if (scope && (scope.root !== repository || input.patches.length + (input.writes?.length ?? 0) > scope.maxWrites
+      || (input.patches.length > 0 && !scope.operations.includes('patch'))
+      || ((input.writes?.length ?? 0) > 0 && !scope.operations.includes('create')))) {
+      throw new PermissionError('requested writes exceed the approved workspace scope');
+    }
     if (this.plan!.patches && JSON.stringify(input.patches) !== JSON.stringify(this.plan!.patches)) {
       throw new PermissionError('patch differs from the approved plan');
     }
-    for (const file of allowed) {
-      if (this.baselineDirty.has(file)) throw new PermissionError(`refusing to overwrite pre-existing work in ${file}`);
-    }
-    if (input.writes?.length) {
-      throw new PermissionError('direct writes require an exact approved file plan');
+    if (JSON.stringify(input.writes ?? []) !== JSON.stringify(this.plan!.writes ?? [])) {
+      throw new PermissionError('writes differ from the exact approved content');
     }
     for (const patch of input.patches) {
       if (!allowed.has(normaliseRelative(patch.file))) {
@@ -520,12 +504,20 @@ export class CodingAgent extends EventEmitter {
         throw new Error(`Patch to ${patch.file} did not fully apply; nothing was forced.`);
       }
       this.tasks.recordChange(this.taskId!, { file: patch.file, action: 'patch', applied: result.patch.applied });
+      this.captureFileBaseline([patch.file]);
     }
 
     for (const write of input.writes ?? []) {
+      if (normaliseRelative(write.file).split('/').some((segment) => isIgnoredDirectory(segment) || isSensitiveFile(segment))) {
+        throw new PermissionError(`refusing to write a secret or dependency path: ${write.file}`);
+      }
+      const target = resolveWithinRootNotRoot(path.resolve(repository, write.file), { root: repository });
+      if (existsSync(target)) throw new PermissionError(`refusing to overwrite existing file ${write.file} through a create operation`);
       writeProjectFile(repository, this.sandbox, write.file, write.content);
+      if (readFileSync(target, 'utf8') !== write.content) throw new Error(`write verification failed for ${write.file}`);
       this.emitEvent('file.written', `Wrote ${write.file}`, true);
       this.tasks.recordChange(this.taskId!, { file: write.file, action: 'write', applied: 1 });
+      this.captureFileBaseline([write.file]);
     }
 
     return this.snapshot();
@@ -560,21 +552,18 @@ export class CodingAgent extends EventEmitter {
     let modelWritten: string[] = [];
     const reverted: string[] = [];
     const issues: string[] = [];
-    let generated = 0;
     let commandsRun = 0;
     let validated = false;
 
     try {
       this.phase = 'implementing';
       if (this.taskId) this.tasks.transition(this.taskId, 'implementing');
-      this.emitEvent('build.creating', `Creating ${plan.root} and initialising a local Git repository`, true);
+      this.emitEvent('build.creating', `Creating ${plan.root}`, true);
 
-      // 1. The directory and Git metadata. Nothing is overwritten: the grant
-      //    already proved the destination did not exist.
+      // 1. The project directory. Nothing is overwritten: the grant already
+      //    proved the destination did not exist. Git is entirely Karl's job —
+      //    Astra creates directories and files and never runs a Git command.
       mkdirSync(authority.root, { recursive: true });
-      const init: GitResult = await runGit(authority.root, this.sandbox, ['init']);
-      if (!init.ok) throw new Error(`git init failed: ${init.stderr.slice(0, 200)}`);
-      this.emitEvent('build.git', 'Initialised a local Git repository. No remote was created and nothing was committed.', true);
       this.repository = authority.root;
 
       // 2. The baseline. Real, dependency-free code, written and verified.
@@ -588,13 +577,13 @@ export class CodingAgent extends EventEmitter {
 
       // 3. Let the local coding model improve the application files, inside the
       //    manifest only. Its output is treated as untrusted until it validates.
-      const writable = plan.manifest.filter((file) => /\.js$/.test(file) && !file.startsWith('test/'));
+      const writable = plan.manifest.filter((file) => /\.(?:js|jsx|ts|tsx|css)$/.test(file) && file.startsWith('src/') && !file.startsWith('test/'));
       if (options.generate && writable.length > 0) {
         this.emitEvent('build.generating', `Asking the local coding model for ${writable.length} application file(s)`, true);
         this.setInvestigatingProposal(true);
         let produced: Record<string, string> = {};
         try {
-          produced = await proposeProjectFiles(plan.purpose, writable, fetch);
+          produced = await proposeProjectFiles(plan.purpose, writable, fetch, undefined, plan.stack);
         } catch (error) {
           issues.push(`the coding model did not improve the application files: ${error instanceof Error ? error.message : String(error)}`);
           this.emitEvent('build.generation_failed', `Kept the generated baseline instead: ${error instanceof Error ? error.message : String(error)}`, false);
@@ -605,7 +594,6 @@ export class CodingAgent extends EventEmitter {
           try {
             const exists = existsSync(path.join(authority.root, relative));
             const result = writeAuthorised(authority, relative, content);
-            generated += 1;
             if (!modelWritten.includes(relative)) modelWritten.push(relative);
             this.emitEvent('build.file', `Wrote and verified ${relative} from the coding model (${result.bytes} bytes)`, true, result.sha256);
             if (this.taskId) this.tasks.recordChange(this.taskId, { file: relative, action: exists ? 'edit' : 'create', applied: 1 });
@@ -623,6 +611,10 @@ export class CodingAgent extends EventEmitter {
       //    report that says what actually failed. The deadline only bounds
       //    *extra* passes.
       for (let iteration = 1; iteration <= limits.maxIterations; iteration += 1) {
+        if (plan.stack.includes('React') && !existsSync(path.join(authority.root, 'node_modules', 'vite'))) {
+          issues.push('React dependencies are unavailable; npm run build was not run and the application remains unvalidated');
+          break;
+        }
         if (iteration > 1 && authorityExpired(authority)) { issues.push('the build spent its time allowance after the first validation pass'); break; }
         if (commandsRun >= limits.maxCommands) { issues.push('the build ran out of its command allowance'); break; }
 
@@ -658,15 +650,15 @@ export class CodingAgent extends EventEmitter {
       }
 
       // 5. Record what is true on disk and write an honest README.
-      const readme = buildProjectReadme(plan.name, plan.launchCommand, validated, validated ? 'every approved validation command passed' : 'validation did not complete');
+      const readme = buildProjectReadme(plan.name, plan.launchCommand, validated, validated ? 'every approved validation command passed' : 'validation did not complete', plan.stack);
       writeAuthorised(authority, 'README.md', readme);
 
-      const onDisk = created.length + generated;
+      const onDisk = plan.manifest.filter((file) => existsSync(path.join(authority.root, file))).length;
       this.buildReport = {
         name: plan.name,
         root: plan.root,
         files: onDisk,
-        fromModel: generated,
+        fromModel: modelWritten.length,
         validated,
         commandsRun,
         launchCommand: plan.launchCommand,
@@ -751,25 +743,25 @@ export class CodingAgent extends EventEmitter {
     return { ...SEPARATE_APPROVAL_EXPLANATIONS };
   }
 
-  /** Create a new repository from an approved plan. Never overwrites. */
+  /** Create a new project directory from an approved plan. Never overwrites. */
   async createRepository(input: { name: string; files: Readonly<Record<string, string>> }): Promise<TaskSnapshot> {
     this.assertApproved();
     const planned = this.plan?.newRepository;
     if (!planned || input.name !== planned.name || JSON.stringify(input.files) !== JSON.stringify(planned.files)) {
-      throw new PermissionError('repository name or scaffold differs from the approved plan');
+      throw new PermissionError('project name or scaffold differs from the approved plan');
     }
     const target = resolveWithinRootNotRoot(path.resolve(this.sandbox.root, input.name), this.sandbox);
-    if (target !== this.plan?.repository) throw new PermissionError('repository path differs from the approved plan');
+    if (target !== this.plan?.repository) throw new PermissionError('project path differs from the approved plan');
     if (existsSync(target)) throw new PermissionError('destination already exists');
     ensureNewRepositoryDirectory(target, this.sandbox);
     for (const [file, content] of Object.entries(input.files)) {
       writeProjectFile(target, this.sandbox, file, content);
     }
-    const init: GitResult = await runGit(target, this.sandbox, ['init']);
-    if (!init.ok) throw new Error(`git init failed: ${init.stderr.slice(0, 200)}`);
-    this.emitEvent('repo.created', `Created ${path.basename(target)} and initialised Git`, init.ok, init.ok ? undefined : init.stderr.slice(0, 200));
+    // Git is Karl's responsibility. Astra writes directories and files and
+    // never initialises a repository, commits, branches or touches a remote.
+    this.emitEvent('repo.created', `Created ${path.basename(target)} with ${Object.keys(input.files).length} file(s)`, true);
     this.repository = target;
-    if (this.taskId) this.tasks.recordChange(this.taskId, { action: 'create_repository', path: target });
+    if (this.taskId) this.tasks.recordChange(this.taskId, { action: 'create_project', path: target });
     return this.snapshot();
   }
 
@@ -815,26 +807,18 @@ export class CodingAgent extends EventEmitter {
       return true;
     }
     if (changes.length === 0) {
-      if (!plan.newRepository) {
-        const status = await gitStatus(this.requireRepository(), this.sandbox);
-        if (!status.clean) throw new Error('the repository changed during interruption; review it and create a fresh plan');
-        this.baselineStatus = fingerprintStatus(status);
-      }
+      if (!plan.newRepository && !plan.project) this.captureFileBaseline(plan.filesToChange);
       this.recoveredWork = false;
       return false;
     }
     if (plan.newRepository) {
       const destination = resolveWithinRootNotRoot(plan.repository, this.sandbox);
-      if (!existsSync(path.join(destination, '.git'))) throw new Error('interrupted repository has no Git metadata; manual review required');
+      if (!existsSync(destination)) throw new Error('interrupted project directory is missing; manual review required');
       for (const [file, content] of Object.entries(plan.newRepository.files)) {
         const target = resolveWithinRootNotRoot(path.resolve(destination, file), { root: destination });
         if (!existsSync(target) || readFileSync(target, 'utf8') !== content) throw new Error('interrupted scaffold differs from the approved plan; manual review required');
       }
     } else {
-      const allowed = new Set(plan.filesToChange.map(normaliseRelative));
-      for (const dirty of await gitDirtyPaths(this.requireRepository(), this.sandbox)) {
-        if (!allowed.has(normaliseRelative(dirty))) throw new Error('unrelated files changed during interruption; manual review required');
-      }
       for (const patch of plan.patches ?? []) {
         const target = resolveWithinRootNotRoot(path.resolve(plan.repository, patch.file), { root: plan.repository });
         const text = readProjectFile(target, { root: plan.repository }).text;
@@ -928,9 +912,11 @@ export class CodingAgent extends EventEmitter {
     const repository = this.requireRepository();
     this.phase = 'reviewing';
     if (this.taskId) this.tasks.transition(this.taskId, 'reviewing');
-    this.diff = await gitDiff(repository, this.sandbox, { paths: this.plan?.filesToChange });
-    this.workingTree = await gitStatus(repository, this.sandbox);
-    this.emitEvent('git.diff', `Diff: ${this.diff.filesChanged} file(s), +${this.diff.insertions}/-${this.diff.deletions}`, true);
+    for (const file of this.plan?.newRepository ? Object.keys(this.plan.newRepository.files) : this.plan?.filesToChange ?? []) {
+      const target = resolveWithinRootNotRoot(path.resolve(repository, file), { root: repository });
+      if (!existsSync(target)) throw new Error(`review failed: ${file} is missing`);
+    }
+    this.emitEvent('file.reviewed', `Verified ${this.plan?.filesToChange.length ?? 0} approved file(s) on disk.`, true);
     return this.snapshot();
   }
 
@@ -1000,6 +986,7 @@ export class CodingAgent extends EventEmitter {
       // continues on that same branch after fresh approval.
       branch: null,
       patches: input.patches,
+      writes: undefined,
       rootCause: input.rootCause,
       expectedOutcome: input.expectedOutcome,
       risks: input.risks,
@@ -1010,8 +997,7 @@ export class CodingAgent extends EventEmitter {
     this.tasks.setPlan(this.taskId, plan as unknown as Record<string, unknown>);
     this.tasks.transition(this.taskId, 'awaiting_approval');
     this.phase = 'awaiting_approval';
-    this.workingTree = await gitStatus(this.requireRepository(), this.sandbox);
-    this.baselineStatus = fingerprintStatus(this.workingTree);
+    this.captureFileBaseline(plan.filesToChange);
     this.emitEvent('plan.correction', 'A bounded correction is proposed after the failed check; fresh approval is required.', true);
     return this.snapshot();
   }
@@ -1082,11 +1068,8 @@ export class CodingAgent extends EventEmitter {
     for (const event of this.tasks.events(task.id, 120)) {
       this.events.push({ id: ++this.eventSeq, at: event.at, taskId: task.id, kind: event.kind, label: event.detail, ok: !/failed|refused|cancelled/.test(event.kind) });
     }
-    this.baselineStatus = null;
+    this.fileBaseline.clear();
     this.phase = task.requiresConfirm ? 'awaiting_approval' : (task.state as CodingPhase);
-    if (this.repository && !this.plan?.fileOperation) {
-      this.workingTree = await gitStatus(this.repository, this.sandbox).catch(() => null);
-    }
     this.emitEvent(
       'task.restored',
       task.requiresConfirm
@@ -1169,6 +1152,27 @@ export class CodingAgent extends EventEmitter {
     return this.repository;
   }
 
+  /** Bind an existing-workspace approval to the exact inspected file bytes. */
+  private captureFileBaseline(files: readonly string[]): void {
+    const root = this.requireRepository();
+    for (const file of files) {
+      const relative = normaliseRelative(file);
+      const target = resolveWithinRootNotRoot(path.resolve(root, relative), { root });
+      this.fileBaseline.set(relative, existsSync(target)
+        ? createHash('sha256').update(readFileSync(target)).digest('hex')
+        : 'absent');
+    }
+  }
+
+  private assertFileBaseline(): void {
+    const root = this.requireRepository();
+    for (const [relative, digest] of this.fileBaseline) {
+      const target = resolveWithinRootNotRoot(path.resolve(root, relative), { root });
+      const current = existsSync(target) ? createHash('sha256').update(readFileSync(target)).digest('hex') : 'absent';
+      if (current !== digest) throw new PermissionError(`${relative} changed after the plan; inspect it and request fresh approval`);
+    }
+  }
+
   private reset(): void {
     this.taskId = null;
     this.phase = 'idle';
@@ -1180,9 +1184,8 @@ export class CodingAgent extends EventEmitter {
     this.error = null;
     this.interrupted = false;
     this.cancellationPending = false;
-    this.baselineStatus = null;
+    this.fileBaseline.clear();
     this.recoveredWork = false;
-    this.baselineDirty.clear();
   }
 }
 
@@ -1205,14 +1208,13 @@ export function scopeFingerprint(plan: ProposedPlan): string {
     commands: plan.commands.map((c) => `${c.executable} ${c.args.join(' ')}`).sort(),
     branch: plan.branch ?? null,
     patches: plan.patches ?? null,
+    writes: plan.writes ?? null,
+    workspaceScope: plan.workspaceScope ?? null,
     newRepository: plan.newRepository ?? null,
     project: plan.project ?? null,
+    application: plan.application ?? null,
     fileOperation: plan.fileOperation ?? null,
   });
-}
-
-function fingerprintStatus(status: GitStatusSummary): string {
-  return status.lines.filter((line) => !line.startsWith('##')).sort().join('\n');
 }
 
 function buildRisks(

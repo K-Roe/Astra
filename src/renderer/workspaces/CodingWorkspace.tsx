@@ -22,7 +22,7 @@ export function CodingWorkspace({
   tellCharacter?: (event: CharacterEvent) => void;
 }) {
   const [task, setTask] = useState<CodingTaskView | null>(null);
-  const [repos, setRepos] = useState<{ name: string; root: string; branch: string | null; clean: boolean }[]>([]);
+  const [repos, setRepos] = useState<{ name: string; root: string }[]>([]);
   const [selected, setSelected] = useState('');
   const [status, setStatus] = useState<Status>(null);
   const [history, setHistory] = useState<{ id: number; objective: string; state: string }[]>([]);
@@ -51,7 +51,7 @@ export function CodingWorkspace({
 
   useEffect(() => {
     void projects.list().then((list) => {
-      if (list.ok) setRepos(list.value.map((p) => ({ name: p.name, root: p.root, branch: p.branch ?? null, clean: p.clean ?? false })));
+      if (list.ok) setRepos(list.value.map((p) => ({ name: p.name, root: p.root })));
     });
   }, []);
 
@@ -105,37 +105,28 @@ export function CodingWorkspace({
       <header className="workspace-head">
         <h2>Coding</h2>
         <p className="workspace-sub">
-          One task engine, shared with the conversation. Astra never commits, pushes or installs anything on her own.
+          One task engine, shared with the conversation. Review each plan's files and commands before approval.
         </p>
       </header>
 
       <div className="workspace-cards">
         <div className="workspace-card">
-          <h3>Repository</h3>
+          <h3>Project</h3>
           <label>
-            <span>Selected repository</span>
+            <span>Selected project</span>
             <select value={selected} onChange={(e) => void choose(e.target.value)}>
-              <option value="">Choose a repository…</option>
+              <option value="">Choose a project…</option>
               {repos.map((repo) => (
-                <option key={repo.root} value={repo.root}>{repo.name} · {repo.branch ?? 'unknown branch'} · {repo.clean ? 'clean' : 'dirty'}</option>
+                <option key={repo.root} value={repo.root}>{repo.name}</option>
               ))}
             </select>
           </label>
           {task?.repository ? (
             <dl className="detail-list">
               <dt>Path</dt><dd>{task.repository}</dd>
-              <dt>Branch</dt><dd>{task.workingTree?.branch ?? 'unknown'}</dd>
-              <dt>Tree</dt>
-              <dd>
-                {task.workingTree
-                  ? task.workingTree.clean
-                    ? 'clean'
-                    : `${task.workingTree.staged} staged, ${task.workingTree.unstaged} modified, ${task.workingTree.untracked} untracked`
-                  : 'unknown'}
-              </dd>
             </dl>
           ) : (
-            <p className="muted">No repository selected. Ask Astra in chat, or choose one here.</p>
+            <p className="muted">No project selected. Ask Astra in chat, or choose one here.</p>
           )}
         </div>
 
@@ -181,10 +172,11 @@ export function CodingWorkspace({
                 <dt>Files</dt><dd>{plan.filesToChange.join(', ') || 'none'}</dd>
                 <dt>Commands</dt>
                 <dd>{plan.commands.map((c) => `${c.executable} ${c.args.join(' ')}`).join(', ') || 'none'}</dd>
-                <dt>Branch</dt><dd>{plan.branch ?? 'current branch'}</dd>
                 <dt>Risks</dt><dd>{plan.risks.join(' ')}</dd>
               </dl>
               {plan.patches?.length ? <details><summary>Proposed patch</summary><pre className="diff-view">{plan.patches.map((patch) => `${patch.file}\n${patch.hunks.map((h) => `- ${h.find}\n+ ${h.replace}`).join('\n')}`).join('\n\n')}</pre></details> : null}
+              {plan.workspaceScope ? <p className="muted">Existing project scope: {plan.workspaceScope.root}; {plan.workspaceScope.maxWrites} approved write(s) across {plan.workspaceScope.files.join(', ')}.</p> : null}
+              {plan.writes?.length ? <details><summary>New file content</summary><pre className="diff-view">{plan.writes.map((write) => `${write.file}\n${write.content}`).join('\n\n')}</pre></details> : null}
               {plan.newRepository ? <details><summary>Scaffold files</summary><pre className="diff-view">{Object.entries(plan.newRepository.files).map(([file, content]) => `${file}\n${content}`).join('\n\n')}</pre></details> : null}
               {plan.fileOperation ? <details open><summary>Direct file {plan.fileOperation.action}: {plan.fileOperation.target}</summary><pre className="diff-view">{plan.fileOperation.action === 'delete' ? 'Delete this file after approval.' : plan.fileOperation.content}</pre><p>Parent directory: {plan.fileOperation.createParent ? 'will be created after approval' : 'already exists'}. The result will be read from disk before completion is reported.</p></details> : null}
               {plan.project ? (

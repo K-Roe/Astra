@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -28,11 +27,6 @@ function lab(name = 'DemoApp') {
   writeFileSync(path.join(repo, 'test.js'), "import { sum } from './src/sum.js';\nif (sum(2, 3) !== 5) { console.error('expected 5'); process.exit(1); }\nconsole.log('tests passed');\n");
   writeFileSync(path.join(repo, '.env'), 'TOKEN=secret\n');
   writeFileSync(path.join(repo, 'README.md'), '# DemoApp\n\nA disposable test repository.\n');
-  execFileSync('git', ['init', '-q', repo], { stdio: 'ignore' });
-  execFileSync('git', ['-C', repo, 'config', 'user.email', 't@e.com']);
-  execFileSync('git', ['-C', repo, 'config', 'user.name', 'T']);
-  execFileSync('git', ['-C', repo, 'add', '.']);
-  execFileSync('git', ['-C', repo, 'commit', '-q', '-m', 'initial']);
 
   const db = new AstraDatabase(path.join(base, 'astra.db'));
   db.migrate();
@@ -65,6 +59,7 @@ const plan = (over = {}) => ({
   objective: 'Fix sum() so it adds',
   searchHints: ['return a - b'],
   proposedFiles: ['src/sum.js'],
+  proposedPatches: PATCH,
   proposedCommands: [{ executable: 'node', args: ['test.js'], purpose: 'run the tests' }],
   rootCause: 'The operator is subtraction instead of addition.',
   ...over,
@@ -110,7 +105,7 @@ test('a pending approval cannot be redirected to another discovered repository',
   try {
     mkdirSync(path.join(other, 'src'), { recursive: true });
     writeFileSync(path.join(other, 'src', 'sum.js'), 'export function sum(a, b) { return a - b; }\n');
-    execFileSync('git', ['init', '-q', other], { stdio: 'ignore' });
+    writeFileSync(path.join(other, 'package.json'), '{"name":"other-app"}\n');
     await agent.beginTask(plan({ proposedPatches: PATCH }));
     assert.throws(() => agent.selectRepository(other), /cancel or finish the current task/i);
     assert.equal(agent.snapshot().repository, repo);
@@ -156,7 +151,7 @@ test('a named repository cannot silently override a different selection', async 
   const other = path.join(root, 'OtherApp');
   try {
     mkdirSync(other, { recursive: true });
-    execFileSync('git', ['init', '-q', other], { stdio: 'ignore' });
+    writeFileSync(path.join(other, 'package.json'), '{"name":"other-app"}\n');
     const bridge = new CodingBridge(agent, sandbox, proposeFixture);
     const result = await bridge.handle('Fix the login bug in OtherApp');
     assert.match(result.reply, /selected repository is .*DemoApp.*request names .*OtherApp/i);
@@ -248,7 +243,7 @@ test('editing a file outside the approved list is refused', async () => {
     agent.approve();
     await assert.rejects(
       () => agent.implement({ patches: [{ file: 'src/other.js', hunks: [{ find: 'a', replace: 'b' }] }] }),
-      /outside the approved file list/,
+      /patch differs from the approved plan/,
     );
     assert.equal(existsSync(path.join(repo, 'src', 'other.js')), false);
   } finally {
@@ -270,16 +265,12 @@ test('changing the scope after approval invalidates the approval', async () => {
   }
 });
 
-test('a pre-existing dirty working tree is detected and preserved', async () => {
+test('unrelated existing work is preserved during investigation', async () => {
   const { agent, repo, cleanup } = selectedLab();
   try {
     writeFileSync(path.join(repo, 'src', 'unrelated.js'), "export const karlsWork = 'do not touch';\n");
     const snapshot = await agent.beginTask(plan());
-    assert.equal(snapshot.workingTree.clean, false);
-    assert.equal(snapshot.workingTree.untracked, 1);
-    const warned = snapshot.events.find((e) => e.kind === 'git.warning');
-    assert.ok(warned, 'Astra must report pre-existing uncommitted work');
-    assert.match(warned.label, /not discard/i);
+    assert.equal(snapshot.phase, 'awaiting_approval');
     // Karl's file is still there after investigation.
     assert.ok(existsSync(path.join(repo, 'src', 'unrelated.js')));
   } finally {
@@ -294,7 +285,7 @@ test('a dirty file with spaces cannot be overwritten through an approved write',
     writeFileSync(target, 'keep this\n');
     await agent.beginTask(plan({ proposedFiles: ['src/Karl notes.js'] }));
     agent.approve();
-    await assert.rejects(() => agent.implement({ patches: [], writes: [{ file: 'src/Karl notes.js', content: 'overwrite\n' }] }), /pre-existing work/i);
+    await assert.rejects(() => agent.implement({ patches: [], writes: [{ file: 'src/Karl notes.js', content: 'overwrite\n' }] }), /approved workspace scope/i);
     assert.equal(readFileSync(target, 'utf8'), 'keep this\n');
   } finally { cleanup(); }
 });
@@ -306,24 +297,24 @@ test('a renderer cannot supply unreviewed file content to an approved coding tas
     agent.approve();
     await assert.rejects(
       () => agent.implement({ patches: [], writes: [{ file: 'src/surprise.js', content: 'unreviewed\n' }] }),
-      /exact approved file plan/i,
+      /approved workspace scope/i,
     );
     assert.equal(existsSync(path.join(repo, 'src', 'surprise.js')), false);
   } finally { cleanup(); }
 });
 
-test('Astra stops if unrelated changes appear underneath her', async () => {
+test('Astra stops if an approved file changes underneath her', async () => {
   const { agent, repo, cleanup } = selectedLab();
   try {
     await agent.beginTask(plan());
     agent.approve();
     // Someone else edits the tree after the plan was made.
-    writeFileSync(path.join(repo, 'src', 'someone-else.js'), "export const surprise = true;\n");
+    writeFileSync(path.join(repo, 'src', 'sum.js'), 'function sum(a, b) { return a * b; }\n');
     await assert.rejects(
       () => agent.implement({ patches: PATCH }),
-      /changed underneath this task/,
+      /changed after the plan/,
     );
-    assert.match(readFileSync(path.join(repo, 'src', 'sum.js'), 'utf8'), /return a - b/, 'no edit should be applied');
+    assert.match(readFileSync(path.join(repo, 'src', 'sum.js'), 'utf8'), /return a \* b/, 'no edit should be applied');
   } finally {
     cleanup();
   }
@@ -340,17 +331,15 @@ test('secrets in the repository are never read into the plan', async () => {
   }
 });
 
-test('the Git diff reflects only what was changed', async () => {
-  const { agent, cleanup } = selectedLab();
+test('review verifies the approved file on disk', async () => {
+  const { agent, repo, cleanup } = selectedLab();
   try {
     await agent.beginTask(plan());
     agent.approve();
     await agent.implement({ patches: PATCH });
     const reviewed = await agent.review();
-    assert.equal(reviewed.diff.filesChanged, 1);
-    assert.match(reviewed.diff.diff, /return a \+ b/);
-    assert.equal(reviewed.diff.insertions >= 1, true);
-    assert.equal(reviewed.diff.deletions >= 1, true);
+    assert.equal(reviewed.phase, 'reviewing');
+    assert.match(readFileSync(path.join(repo, 'src', 'sum.js'), 'utf8'), /return a \+ b/);
   } finally {
     cleanup();
   }
@@ -468,9 +457,9 @@ test('creating a repository refuses to overwrite an existing directory', async (
     await agent.beginTask(plan({ newRepository: { name: 'Fresh', path: path.join(root, 'Fresh'), files } }));
     agent.approve();
     await agent.createRepository({ name: 'Fresh', files });
-    assert.ok(existsSync(path.join(root, 'Fresh', '.git')));
+    assert.equal(existsSync(path.join(root, 'Fresh', '.git')), false);
     const review = await agent.review();
-    assert.match(review.diff.diff, /package\.json/);
+    assert.equal(review.phase, 'reviewing');
     await assert.rejects(
       () => agent.createRepository({ name: 'Fresh', files }),
       /already exists/i,
@@ -503,16 +492,15 @@ test('a failed check permits one same-scope correction with renewed approval', a
   const { agent, repo, cleanup } = selectedLab();
   try {
     const first = [{ file: 'src/sum.js', hunks: [{ find: 'return a - b;', replace: 'return a * b;' }] }];
-    await agent.beginTask(plan({ proposedPatches: first, branch: 'astra/correction-test' }));
+    await agent.beginTask(plan({ proposedPatches: first }));
     agent.approve();
-    await agent.createTaskBranch();
     await agent.implement({ patches: first });
     const failed = await agent.runApprovedCommand('node', ['test.js']);
     assert.equal(failed.testResults.at(-1).ok, false);
     const second = [{ file: 'src/sum.js', hunks: [{ find: 'return a * b;', replace: 'return a + b;' }] }];
     const correction = await agent.proposeCorrection({ rootCause: 'multiplication was also wrong', expectedOutcome: 'sum adds', risks: [], patches: second });
     assert.equal(correction.phase, 'awaiting_approval');
-    assert.equal(correction.plan.branch, null, 'reuse the existing task branch');
+    assert.equal(correction.plan.branch, null);
     await assert.rejects(() => agent.implement({ patches: second }), /not been approved/);
     agent.approve();
     await agent.implement({ patches: second });

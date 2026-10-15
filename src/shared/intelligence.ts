@@ -221,6 +221,8 @@ export interface CodingTaskView {
     readonly rootCause: string;
     readonly investigationNotes: readonly string[];
     readonly patches?: readonly { readonly file: string; readonly hunks: readonly { readonly find: string; readonly replace: string }[] }[];
+    readonly writes?: readonly { readonly file: string; readonly content: string }[];
+    readonly workspaceScope?: { readonly root: string; readonly files: readonly string[]; readonly operations: readonly ('patch' | 'create' | 'command')[]; readonly maxWrites: number };
     readonly newRepository?: { readonly name: string; readonly files: Readonly<Record<string, string>> };
     /**
  * The exact operation Karl approved.

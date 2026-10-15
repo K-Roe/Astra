@@ -86,10 +86,16 @@ export class ChatService {
             return;
           }
         }
+        if (snapshot.plan?.application) {
+          this.history.push({ role: 'assistant', content: `**React application verified in ${snapshot.plan.application.root}.** The approved files are present and the approved build passed. Run \`${snapshot.plan.application.launchCommand}\` from that directory to start the development server. Astra has not started or checked a server.` });
+          return;
+        }
         const last = snapshot.testResults.at(-1);
         this.history.push({ role: 'assistant', content: `Coding task #${snapshot.taskId} completed in ${snapshot.repository}. ${last ? `${snapshot.testResults.filter((result) => result.ok).length}/${snapshot.testResults.length} approved checks passed. ` : 'No executable checks were run. '}${snapshot.diff ? `Git diff: ${snapshot.diff.filesChanged} file(s), +${snapshot.diff.insertions}/-${snapshot.diff.deletions}.` : 'No Git diff was available.'} Review the full diff in Coding.` });
       } else if (event.kind === 'task.failed') {
-        this.history.push({ role: 'assistant', content: `Coding task #${snapshot.taskId} failed: ${snapshot.error ?? event.label}. Review the test output and changed files in Coding.` });
+        this.history.push({ role: 'assistant', content: snapshot.buildReport
+          ? describeProjectBuild(snapshot.buildReport)
+          : `Coding task #${snapshot.taskId} is incomplete: ${snapshot.error ?? event.label}. Review the test output and changed files in Coding. Continue this objective after resolving the stated blocker.` });
       } else if (event.kind === 'plan.correction') {
         this.history.push({ role: 'assistant', content: `The approved check failed. I proposed one bounded correction in the same repository and file scope. Review the revised patch and explicitly approve it before any further edit or command.` });
       }
@@ -389,21 +395,18 @@ function describeProjectBuild(report: {
   issues: readonly string[];
 }): string {
   const lines = [
-    `**${report.name} is built and verified on disk.**`,
+    report.validated ? `**${report.name} was built and verified on disk.**` : `**${report.name} is incomplete.**`,
     '',
     `- Location: \`${report.root}\``,
     `- Files written and read back: ${report.files}`,
     `- Of those, produced by the local coding model: ${report.fromModel}`,
     `- Validation commands run: ${report.commandsRun}, all passed: ${report.validated ? 'yes' : 'no'}`,
-    report.validated
-      ? '- Dependencies: none. The project runs on the Node.js already installed.'
-      : '- Dependencies: none.',
+    report.validated ? '- Approved validation passed with available dependencies.' : '- Dependency and validation status: see remaining issues below.',
     report.issues.length ? '' : null,
     ...(report.issues.length ? ['**Remaining issues:**', ...report.issues.map((issue) => `- ${issue}`)] : []),
     '',
-    `**Launch it yourself:** \`${report.launchCommand}\` from \`${report.root}\`, then open http://localhost:3000.`,
+    report.validated ? `**Launch it yourself:** \`${report.launchCommand}\` from \`${report.root}\`.` : `**After resolving the issues:** launch with \`${report.launchCommand}\` from \`${report.root}\`.`,
     'Astra did not start a server and has not checked that anything is listening on that port; it can do so if you ask.',
-    'The Git repository was initialised locally. No remote was created and nothing was committed.',
   ].filter((line) => line !== null);
   return lines.join('\n');
 }

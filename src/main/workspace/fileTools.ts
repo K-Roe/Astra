@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -339,7 +338,7 @@ export function applyPatch(
     applied += 1;
   }
 
-  if (applied > 0) writeFileSync(target, working, 'utf8');
+  if (failed.length === 0 && applied > 0) writeFileSync(target, working, 'utf8');
   return { patch: { applied, failed }, relativePath: path.relative(resolveRoot(sandbox), target) };
 }
 
@@ -353,11 +352,6 @@ export interface GitResult {
   readonly timedOut: boolean;
 }
 
-export interface RunGitOptions {
-  readonly timeoutMs?: number;
-  readonly maxOutputChars?: number;
-}
-
 /**
  * Run git with an argument array and no shell.
  *
@@ -365,32 +359,14 @@ export interface RunGitOptions {
  * argument. `-C <root>` scopes every invocation to one authorised repository.
  */
 export function runGit(
-  root: string,
-  sandbox: SandboxOptions,
-  args: readonly string[],
-  options: RunGitOptions = {},
+  _root: string,
+  _sandbox: SandboxOptions,
+  _args: readonly string[],
 ): Promise<GitResult> {
-  const safeRoot = resolveWithinRoot(root, sandbox);
-  const timeoutMs = options.timeoutMs ?? 30_000;
-  const maxOutput = options.maxOutputChars ?? 400_000;
-
-  return new Promise((resolve) => {
-    execFile(
-      'git',
-      ['-C', safeRoot, ...args],
-      { timeout: timeoutMs, maxBuffer: maxOutput, windowsHide: true, shell: false },
-      (error, stdout, stderr) => {
-        const code = error && typeof (error as { code?: unknown }).code === 'number' ? Number((error as { code?: number }).code) : error ? 1 : 0;
-        resolve({
-          ok: !error,
-          code,
-          stdout: String(stdout).slice(0, maxOutput),
-          stderr: String(stderr).slice(0, maxOutput),
-          timedOut: Boolean(error && /timed out|ETIMEDOUT/i.test(String((error as Error).message))),
-        });
-      },
-    );
-  });
+  void _root;
+  void _sandbox;
+  void _args;
+  return Promise.resolve({ ok: false, code: 1, stdout: '', stderr: 'Git operations are disabled.', timedOut: false });
 }
 
 export interface GitStatusSummary {

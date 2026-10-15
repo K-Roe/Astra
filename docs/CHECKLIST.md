@@ -1,4 +1,23 @@
-﻿# Project ASTRA checklist
+# Project ASTRA checklist
+
+## Real-world React project recovery (2026-10-15)
+
+- [x] Partial existing `astraBlog` case: a disposable directory with only `AstraBackstory.js` received one exact missing-file workspace plan; the file was preserved and nine React/Vite files were created after visible approval. Native and independent builds passed with already available dependencies; no `.git` was created.
+- [x] Multi-turn continuity: visible Electron chat “Continue” retained the same task and chat “approve” did not grant authority. The in-app approval event preceded file writes; “Finish the website” reported a verified build for the existing workspace. New-project acceptance also retained the objective across “Continue” and accurately reported missing dependencies after file creation.
+- [x] React completion gate checks required files, npm dev/build scripts, React/Vite declarations, dependency availability and passing approved build before existing-workspace completion. Focused regression and native runs passed.
+- [x] Focused interruption regression: an approved new-project task paused after partial on-disk creation; “Continue” created a fresh exact existing-workspace plan without reusing its old approval or changing existing work. `npm test` passed 379/379 and lint passed.
+- [x] A failed local-model proposal for a partial project records the objective as failed with no writes; “Continue” retries a fresh reviewed plan. Focused regression passed.
+- [ ] Karl's real `C:\Users\karlr\repos\astraBlog` remains untouched and lacks `package.json`. Completing it through Astra requires Karl to review and approve the actual workspace plan; dependency installation remains a separate permission. A full restart-interruption recovery run was not performed.
+
+## Coding autonomy correction (2026-10-15)
+
+- [x] React requests use a React/TypeScript/Vite manifest with homepage, navigation and about page; `tests/codingAutonomy.test.mjs` and disposable model-backed acceptance passed.
+- [x] Project creation produces no `.git`; `runGit` and the command runner refuse Git. Disposable acceptance checked the directory and focused tests checked both refusal paths.
+- [x] Existing-project patches and new components are bound to approved file content/hashes and preserve unrelated files; focused tests passed.
+- [x] React build passes with already available dependencies; disposable acceptance borrowed Astra's installed packages without installing them in a real project.
+- [x] A Laravel API request selects an existing backend, scopes a PHP patch and preserves an unrelated file; the focused test passes without installed Laravel dependencies.
+- [x] Native Electron React creation with Karl's visible approval: `node scripts/acceptance-coding-autonomy-native.mjs` passed outside the command sandbox on 2026-10-15. The disposable `MyWebsite` had nine files, six model-written, no `.git`, and a passing external React build with already available dependencies. Astra accurately reported its own build unvalidated because the new project had no installed dependencies. The narrow `ALL APPLICATION PACKAGES` read/execute grant on `node_modules\electron\dist` did not resolve the same fatal error inside the Codex command sandbox; no broader ACL was applied.
+- [ ] A full model-generated Laravel API and broad existing-project model development are NOT VERIFIED. Dependency installation remains a separate approval.
 
 ## Personal memory chat grounding correction (2026-10-15)
 

@@ -31,7 +31,7 @@ export interface CommandPolicy {
 }
 
 export const DEFAULT_COMMAND_POLICY: CommandPolicy = {
-  allowedExecutables: new Set(['npm', 'node', 'npx', 'git', 'pnpm', 'yarn', 'python', 'pytest', 'tsc', 'eslint']),
+  allowedExecutables: new Set(['npm', 'node', 'npx', 'pnpm', 'yarn', 'python', 'pytest', 'php', 'tsc', 'eslint']),
   // `install` is deliberately absent: adding dependencies needs its own approval.
   allowedPackageScripts: new Set(['test', 'run', 'lint', 'build', 'typecheck', 'start']),
   maxOutputChars: 200_000,
@@ -107,6 +107,10 @@ export function assertCommandAllowed(request: CommandRequest, policy: CommandPol
     } else if (script && !policy.allowedPackageScripts.has(script) && script !== 'version' && script !== 'ls') {
       throw new CommandRejected(`package script "${script}" is not allowed`);
     }
+  }
+  if (name === 'php' && !(request.args.length === 2 && request.args[0] === 'artisan' && request.args[1] === 'test')
+    && !(request.args.length === 2 && request.args[0] === '-l' && /^[A-Za-z0-9_/.-]+\.php$/.test(request.args[1]) && !request.args[1].split(/[\\/]/).includes('..'))) {
+    throw new CommandRejected('PHP validation is limited to artisan test or a relative php -l target');
   }
 }
 

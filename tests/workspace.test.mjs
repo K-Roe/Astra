@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -12,8 +11,8 @@ const {
   searchProjectCode, suggestTestCommands,
 } = require('../dist-electron/main/workspace/repoTools.js');
 const {
-  writeProjectFile, applyPatch, deleteProjectFile, gitStatus, gitDiff,
-  createBranch, ensureNewRepositoryDirectory, FileToolError,
+  writeProjectFile, applyPatch, deleteProjectFile, runGit,
+  ensureNewRepositoryDirectory, FileToolError,
 } = require('../dist-electron/main/workspace/fileTools.js');
 const {
   assertCommandAllowed, runApprovedCommand, CommandRejected, DEFAULT_COMMAND_POLICY,
@@ -32,7 +31,6 @@ function sandboxWithRepo(name = 'TestRepo') {
   writeFileSync(path.join(repo, 'id_rsa'), '-----BEGIN PRIVATE KEY-----\n');
   mkdirSync(path.join(repo, 'node_modules', 'junk'), { recursive: true });
   writeFileSync(path.join(repo, 'node_modules', 'junk', 'big.js'), 'x'.repeat(100));
-  execFileSync('git', ['init', '-q', repo], { stdio: 'ignore' });
   return { base, root, repo, sandbox: { root }, cleanup: () => rmSync(base, { recursive: true, force: true }) };
 }
 
@@ -44,7 +42,7 @@ test('repositories are discovered under the root and metadata is read', () => {
     const repos = discoverRepositories(sandbox);
     assert.equal(repos.length, 1);
     assert.equal(repos[0].name, 'TestRepo');
-    assert.equal(repos[0].hasGit, true);
+    assert.equal(repos[0].hasGit, false);
     assert.equal(repos[0].description, 'A test project');
     assert.ok(repos[0].detectedLanguages.includes('JavaScript'));
     assert.ok(repos[0].root.startsWith(root));
@@ -215,51 +213,12 @@ test('creating a new repository directory refuses an existing non-empty one', ()
 
 // ------------------------------------------------------------------ git
 
-test('git status and diff reflect real repository changes', async () => {
+test('Git helper refuses commands without executing them', async () => {
   const { cleanup, repo, sandbox } = sandboxWithRepo();
   try {
-    execFileSync('git', ['-C', repo, 'config', 'user.email', 'test@example.com']);
-    execFileSync('git', ['-C', repo, 'config', 'user.name', 'Test']);
-    execFileSync('git', ['-C', repo, 'add', '.']);
-    execFileSync('git', ['-C', repo, 'commit', '-q', '-m', 'initial']);
-
-    const clean = await gitStatus(repo, sandbox);
-    assert.equal(clean.clean, true);
-    assert.ok(clean.branch);
-
-    writeProjectFile(repo, sandbox, 'src/index.js', 'export function add(a, b) {\n  return a + b + 1;\n}\n');
-    const dirty = await gitStatus(repo, sandbox);
-    assert.equal(dirty.clean, false);
-    assert.equal(dirty.unstaged, 1);
-
-    const diff = await gitDiff(repo, sandbox);
-    assert.equal(diff.filesChanged, 1);
-    assert.ok(diff.insertions >= 1);
-    assert.match(diff.diff, /return a \+ b \+ 1/);
-  } finally {
-    cleanup();
-  }
-});
-
-test('branch creation refuses to clobber and rejects invalid names', async () => {
-  const { cleanup, repo, sandbox } = sandboxWithRepo();
-  try {
-    // A branch ref only exists once there is a commit behind it.
-    execFileSync('git', ['-C', repo, 'config', 'user.email', 'test@example.com']);
-    execFileSync('git', ['-C', repo, 'config', 'user.name', 'Test']);
-    execFileSync('git', ['-C', repo, 'add', '.']);
-    execFileSync('git', ['-C', repo, 'commit', '-q', '-m', 'initial']);
-
-    const created = await createBranch(repo, sandbox, 'astra/task-1');
-    assert.equal(created.ok, true);
-
-    const again = await createBranch(repo, sandbox, 'astra/task-1');
-    assert.equal(again.ok, false);
-    assert.match(again.stderr, /already exists/);
-
-    const bad = await createBranch(repo, sandbox, '--upload-pack=evil');
-    assert.equal(bad.ok, false);
-    assert.match(bad.stderr, /invalid branch name/);
+    const result = await runGit(repo, sandbox, ['status']);
+    assert.equal(result.ok, false);
+    assert.match(result.stderr, /disabled/i);
   } finally {
     cleanup();
   }

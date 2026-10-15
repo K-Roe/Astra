@@ -80,7 +80,7 @@ export function discoverRepositories(sandbox: SandboxOptions, maxDepth = 2, limi
     } catch {
       return;
     }
-    if (entries.includes('.git')) {
+    if (depth > 0 && (entries.some((entry) => ['package.json', 'composer.json', 'artisan', 'pyproject.toml', 'Cargo.toml', 'go.mod'].includes(entry)) || entries.includes('.git'))) {
       found.push(describeRepository(directory, sandbox));
       return; // Do not descend into a repository's own working tree.
     }

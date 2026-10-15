@@ -257,13 +257,7 @@ test('one approval builds, writes, verifies and validates a working project', as
     const snapshot = agent.snapshot();
     const target = path.join(root, 'AstrasBlog');
 
-    // A real directory with a real Git repository.
-    assert.equal(existsSync(path.join(target, '.git')), true);
-    const gitTop = execFileSync('git', ['-C', target, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
-    assert.equal(path.resolve(gitTop).toLowerCase(), path.resolve(target).toLowerCase());
-    // A remote must never be created.
-    const remotes = execFileSync('git', ['-C', target, 'remote'], { encoding: 'utf8' }).trim();
-    assert.equal(remotes, '', 'no remote may be created');
+    assert.equal(existsSync(path.join(target, '.git')), false);
 
     // Real application code, verified byte for byte.
     assert.ok(existsSync(path.join(target, 'src', 'server.js')));

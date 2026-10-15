@@ -11,6 +11,7 @@ import { buildGrounding } from './knowledge/grounding';
 import { TaskStore } from './agent/taskStore';
 import { CodingAgent } from './agent/codingAgent';
 import { CodingBridge } from './agent/codingBridge';
+import { verifyReactApplication } from './agent/applicationVerification';
 import { proposeCodingPatch } from './agent/codingModel';
 import { crawlApprovedSource } from './research/reader';
 import { UrlRejected } from './research/urlGuard';
@@ -22,7 +23,6 @@ import {
   type DiscoveredRepo,
 } from './workspace/repoTools';
 import { resolveWithinRoot, type SandboxOptions } from './workspace/pathGuard';
-import { gitStatus } from './workspace/fileTools';
 import {
   CONVERSATION_MODEL,
   CODING_MODEL,
@@ -298,10 +298,7 @@ export class IntelligenceService implements IntelligenceBridge {
   }
 
   async listProjects() {
-    return Promise.all(this.repos().map(async (repo) => {
-      const status = await gitStatus(repo.root, this.sandbox);
-      return { ...this.view(repo), branch: status.branch, clean: status.clean };
-    }));
+    return this.repos().map((repo) => ({ ...this.view(repo), branch: null, clean: false }));
   }
 
   private view(repo: DiscoveredRepo) {
@@ -490,7 +487,6 @@ export class IntelligenceService implements IntelligenceBridge {
   async codingCreateBranch(): Promise<CodingTaskView> { this.assertNoConcurrentCodingRun(); await this.codingAgent.createTaskBranch(); return this.codingView(); }
   async codingApply(input: { patches?: { file: string; hunks: { find: string; replace: string }[] }[]; writes?: { file: string; content: string }[] }): Promise<CodingTaskView> {
     this.assertNoConcurrentCodingRun();
-    await this.codingAgent.createTaskBranch();
     await this.codingAgent.implement({ patches: input.patches ?? [], ...(input.writes ? { writes: input.writes } : {}) });
     return this.codingView();
   }
@@ -584,9 +580,10 @@ export class IntelligenceService implements IntelligenceBridge {
       await agent.createRepository(plan.newRepository);
     } else if (plan.fileOperation) {
       agent.executeFileOperation();
-    } else if (plan.patches?.length) {
-      if (plan.branch) await agent.createTaskBranch();
-      await agent.implement({ patches: plan.patches });
+    } else if (plan.patches?.length || plan.writes?.length) {
+      await agent.implement({ patches: plan.patches ?? [], writes: plan.writes ?? [] });
+    } else if (plan.application) {
+      // A previously interrupted build may need only its approved validation.
     } else {
       throw new Error('approved plan contains no bounded work');
     }
@@ -594,7 +591,27 @@ export class IntelligenceService implements IntelligenceBridge {
     // A project build runs its own validation and repair loop inside
     // runProjectBuild, bounded by the plan's limits. Re-running the commands
     // here would double-count the budget and bypass the repair pass.
-    if (plan.project) return;
+    if (plan.project) {
+      const report = agent.snapshot().buildReport;
+      const reactGate = plan.project.stack.includes('React')
+        ? verifyReactApplication(plan.project.root, plan.project.manifest).issues
+        : [];
+      if (report?.validated && reactGate.length === 0 && (!plan.project.stack.includes('React') || report.fromModel > 0)) {
+        await agent.review();
+        await agent.complete('project files and approved validation completed');
+      } else {
+        agent.fail(`Project files were created but the request remains incomplete: ${[...(report?.issues ?? []), ...reactGate].join('; ') || 'validation or model generation did not complete'}`);
+      }
+      return;
+    }
+    if (plan.application) {
+      if (plan.application.root !== plan.repository || !plan.application.stack.includes('React')) throw new Error('approved application scope does not match the workspace');
+      const verification = verifyReactApplication(plan.repository, plan.application.manifest);
+      if (verification.issues.length) {
+        agent.fail(`React application remains incomplete: ${verification.issues.join('; ')}`);
+        return;
+      }
+    }
     for (const command of plan.commands) {
       const result = await agent.runApprovedCommand(command.executable, command.args);
       if (agent.isStopping()) return;

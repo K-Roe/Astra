@@ -9,13 +9,13 @@ import {
 } from './codingIntent';
 import type { CodingAgent, TaskSnapshot, ToolEvent } from './codingAgent';
 import { discoverRepositories, readProjectFile, searchProjectCode, describeProject, listProjectFiles } from '../workspace/repoTools';
-import { type SandboxOptions } from '../workspace/pathGuard';
-import { existsSync } from 'node:fs';
+import { resolveWithinRootNotRoot, type SandboxOptions } from '../workspace/pathGuard';
+import { existsSync, lstatSync, readdirSync } from 'node:fs';
 import path from 'node:path';
-import { proposeCodingPatch, proposeFileContent, type ModelProposal } from './codingModel';
-import { analyseProjectRequest, buildProjectScaffold } from './projectBuild';
+import { proposeCodingPatch, proposeFileContent, proposeProjectFiles, type ModelProposal } from './codingModel';
+import { analyseProjectRequest, buildProjectScaffold, validateGeneratedFiles } from './projectBuild';
+import { verifyReactApplication } from './applicationVerification';
 import { SEPARATE_APPROVAL_EXPLANATIONS } from '../workspace/projectAuthority';
-import { gitStatus } from '../workspace/fileTools';
 import { inspectLocalService, inspectPath } from '../workspace/verification';
 import { planDirectFileAction, readDirectFile, type DirectFileAction } from '../workspace/fileTools';
 import { PRELIMINARY_CODING_RELIABILITY, routeTask } from '../models/codingBenchmark';
@@ -53,6 +53,7 @@ export class CodingBridge {
     private readonly isExecuting: () => boolean = () => false,
     private readonly codingRoute: () => { permitted: boolean; reason: string } = () => routeTask('coding', { codingReliability: PRELIMINARY_CODING_RELIABILITY }),
     private readonly fileProposer: typeof proposeFileContent = proposeFileContent,
+    private readonly projectProposer: typeof proposeProjectFiles = proposeProjectFiles,
   ) {}
 
   onActivity(listener: (event: ToolEvent, snapshot: TaskSnapshot) => void): () => void {
@@ -64,6 +65,12 @@ export class CodingBridge {
    * and the chat model should answer instead.
    */
   async handle(message: string, cancellation?: AbortSignal): Promise<ChatToolResult | null> {
+    const current = this.agent.snapshot();
+    if (/^\s*(?:approve|yes,?\s*(?:go ahead|do it)|permission granted)\s*[.!]?\s*$/i.test(message) && current.phase === 'awaiting_approval') {
+      return { reply: `The plan for ${current.objective} still needs approval through Astra's Approve plan control. This chat message does not grant file or command authority.`, handled: true, snapshot: current };
+    }
+    if (this.isProjectContinuation(message, current)) return this.continueProject(current);
+    if (this.isApplicationBuildRequest(message)) return this.proposeApplication(message, cancellation);
     const intent = routeCodingIntent(message);
     if (intent.kind === 'chitchat') return null;
 
@@ -120,9 +127,8 @@ export class CodingBridge {
     if (repos.length === 0) return 'No repositories were found under the approved root.';
     const lines = await Promise.all(repos.map(async (repo) => {
       const described = describeProject(repo.root, this.sandbox);
-      const status = await gitStatus(repo.root, this.sandbox);
       const tests = described.testCommands.length ? `, tests: ${described.testCommands.join(', ')}` : '';
-      return `- **${repo.name}** — ${repo.root} (branch: ${status.branch ?? 'unknown'}, tree: ${status.clean ? 'clean' : 'dirty'}, ${described.detectedLanguages.join(', ') || 'language unknown'}${tests})`;
+      return `- **${repo.name}** — ${repo.root} (${described.detectedLanguages.join(', ') || 'language unknown'}${tests})`;
     }));
     const current = this.agent.getRepository();
     return `Found ${repos.length} repository/repositories under ${this.sandbox.root}:\n\n${lines.join('\n')}${current ? `\n\nCurrently selected: ${current}` : ''}`;
@@ -200,29 +206,15 @@ export class CodingBridge {
   }
 
   private async showChanges(): Promise<ChatToolResult> {
-    if (this.isExecuting()) return { reply: 'The approved coding workflow is still running. Its current changes and tool activity are visible in Coding; ask for the final diff when it finishes.', handled: true };
-    const repository = this.agent.getRepository();
-    if (!repository) return { reply: 'Astra has no repository selected.', handled: true };
-    try {
-      const snapshot = await this.agent.review();
-      const diff = snapshot.diff;
-      if (!diff || diff.filesChanged === 0) {
-        const tree = snapshot.workingTree;
-        return {
-          reply: tree && !tree.clean
-            ? `There is no committed diff to show, but the working tree has uncommitted changes (${tree.lines.filter((l) => !l.startsWith('##')).length}). Astra will not discard them.`
-            : 'There are no changes to show in this repository.',
-          handled: true,
-        };
-      }
-      return {
-        reply: `${diff.filesChanged} file(s) changed, +${diff.insertions}/-${diff.deletions}.\n\n\`\`\`diff\n${diff.diff.slice(0, 3000)}\n\`\`\``,
-        handled: true,
-        snapshot,
-      };
-    } catch (error) {
-      return { reply: `Astra could not read the diff: ${error instanceof Error ? error.message : String(error)}`, handled: true };
-    }
+    if (this.isExecuting()) return { reply: 'The approved coding workflow is still running. Its changes and activity are visible in Coding when the command finishes.', handled: true };
+    const snapshot = this.agent.snapshot();
+    if (!snapshot.plan) return { reply: 'There is no coding task to review.', handled: true };
+    if (!snapshot.changes.length) return { reply: 'This task has not changed any files.', handled: true, snapshot };
+    return {
+      reply: `Recorded changes in ${snapshot.plan.repository}:\n${snapshot.changes.map((change) => `- ${change.action}: ${change.file ?? 'project'}`).join('\n')}\n\nSee the approved patch and exact new-file content in Coding.`,
+      handled: true,
+      snapshot,
+    };
   }
 
   private async cancel(): Promise<ChatToolResult> {
@@ -285,8 +277,7 @@ export class CodingBridge {
     const subject = this.resolveClaimSubject(intent);
     if ('unresolved' in subject) return { reply: subject.unresolved, handled: true };
 
-    const branch = (await gitStatus(subject.target, this.sandbox).catch(() => ({ branch: null }))).branch;
-    const inspection = inspectPath(subject.target, this.sandbox, branch);
+    const inspection = inspectPath(subject.target, this.sandbox, null);
 
     if (inspection.unavailable) {
       return { reply: `${inspection.unavailable} Astra has not verified anything about "${subject.label}".`, handled: true };
@@ -321,7 +312,6 @@ export class CodingBridge {
       return { reply: `**Verified: it does not exist.** \`${inspection.target}\` is not on disk, so it cannot be a Git repository. Astra has not created it.`, handled: true };
     }
 
-    const status = inspection.isGitRepository ? await gitStatus(inspection.target, this.sandbox).catch(() => null) : null;
     if (!inspection.isGitRepository) {
       return {
         reply: `**Verified: no.** \`${inspection.target}\` exists but has no \`.git\` entry, so Astra cannot call it a Git repository. Astra has not run \`git init\` and nothing was changed.`,
@@ -329,7 +319,7 @@ export class CodingBridge {
       };
     }
     return {
-      reply: `**Verified: yes.** \`${inspection.target}\` has real Git metadata.\n- Branch: ${status?.branch ?? 'unknown'}\n- Working tree: ${status?.clean === false ? 'dirty' : 'clean'}\nAstra only reports this because it read the repository itself.`,
+      reply: `**Verified: yes.** \`${inspection.target}\` has a .git entry.`,
       handled: true,
     };
   }
@@ -352,7 +342,7 @@ export class CodingBridge {
 
     const service = await inspectLocalService(address);
     if (service.unavailable) {
-      return { reply: `${service.unavailable}\n\nAstra has not started anything. Astra cannot start web servers — approval-based project creation writes files and initialises local Git, but it does not launch a process or serve a URL.`, handled: true };
+      return { reply: `${service.unavailable}\n\nAstra has not started a web server or served a URL.`, handled: true };
     }
     return {
       reply: `**Verified: something accepted a connection on ${service.host}:${service.port}.** Astra completed a real TCP connection to ${service.url}. That proves the port is listening; it does not prove which application is behind it, and Astra did not start it.`,
@@ -361,6 +351,121 @@ export class CodingBridge {
   }
 
   // ------------------------------------------------------------- mutating
+
+  private isApplicationBuildRequest(message: string): boolean {
+    const request = analyseProjectRequest(message, null);
+    return request.buildsApplication && request.stack.includes('React')
+      && /\b(?:blog|website|site|app|application|project)\b/i.test(message);
+  }
+
+  private isProjectContinuation(message: string, snapshot: TaskSnapshot): boolean {
+    if (!snapshot.plan?.project && !snapshot.plan?.application) return false;
+    return /^\s*(?:continue|resume|finish(?: the (?:website|site|blog|project|repo))?|just finish it|build the whole (?:repo|project)|keep going)(?:[.!\s].*)?$/i.test(message);
+  }
+
+  private async continueProject(snapshot: TaskSnapshot): Promise<ChatToolResult> {
+    if (snapshot.requiresConfirmation && snapshot.plan) {
+      this.agent.fail('The interrupted project requires a fresh inspected workspace plan; no prior authority was reused.');
+      return this.proposeApplication(snapshot.plan.objective);
+    }
+    if (snapshot.phase === 'awaiting_approval') return {
+      reply: `The project objective is still ${snapshot.objective}. The scoped plan is awaiting approval in Astra's visible Coding workspace. A chat message does not grant authority.`,
+      handled: true, snapshot,
+    };
+    if (['implementing', 'testing', 'reviewing', 'investigating', 'planning'].includes(snapshot.phase)) return {
+      reply: `The approved project task is still ${snapshot.phase}. Astra will continue its permitted work and report the verified result.`,
+      handled: true, snapshot,
+    };
+    if (snapshot.phase === 'paused') return {
+      reply: 'The project task was interrupted. Resume it through the Coding workspace confirmation so Astra can recheck the same approved scope before acting.',
+      handled: true, snapshot,
+    };
+    if (snapshot.phase === 'failed') {
+      const target = snapshot.plan?.application?.root ?? snapshot.plan?.project?.root;
+      if (target && existsSync(target) && snapshot.plan) return this.proposeApplication(snapshot.plan.objective);
+      return { reply: `The previous project task failed: ${snapshot.error ?? 'no verified completion'}. The destination is absent; ask Astra to propose a fresh plan.`, handled: true, snapshot };
+    }
+    if (snapshot.phase === 'completed' && snapshot.plan?.application) {
+      const gate = verifyReactApplication(snapshot.plan.application.root, snapshot.plan.application.manifest);
+      const buildPassed = snapshot.testResults.some((result) => result.ok && /npm run build/.test(result.command));
+      return { reply: gate.issues.length === 0 && buildPassed
+        ? `The React application is verified on disk at ${snapshot.plan.application.root}; its approved build passed. Run \`${snapshot.plan.application.launchCommand}\` from that directory. Astra has not started a server.`
+        : `The project task has a completion record, but the React application is not currently verified: ${[...gate.issues, ...(!buildPassed ? ['no passing approved build is recorded'] : [])].join('; ')}`,
+      handled: true, snapshot };
+    }
+    return { reply: `The project task is ${snapshot.phase}. ${snapshot.buildReport?.validated ? 'Its recorded validation passed.' : 'A complete, runnable application has not been verified.'}`, handled: true, snapshot };
+  }
+
+  /** Route whole-application work before generic path inspection or chat. */
+  private async proposeApplication(message: string, cancellation?: AbortSignal): Promise<ChatToolResult> {
+    if (['investigating', 'planning', 'awaiting_approval', 'implementing', 'testing', 'reviewing'].includes(this.agent.snapshot().phase)) {
+      return { reply: 'The current coding plan remains active. Review its state in Coding; Astra will not replace its approved scope from chat.', handled: true, snapshot: this.agent.snapshot() };
+    }
+    const spokenPath = extractAbsoluteFilePath(message);
+    const rawName = spokenPath ? path.basename(spokenPath) : extractNewRepositoryName(message);
+    if (!rawName) return { reply: 'Name the React project or give its exact directory under the approved workspace root.', handled: true };
+    const wantedName = rawName.toLowerCase();
+    const existing = spokenPath ? undefined : readdirSync(this.sandbox.root, { withFileTypes: true })
+      .find((entry) => entry.name.toLowerCase() === wantedName && entry.isDirectory());
+    const name = spokenPath ? rawName : existing?.name ?? normaliseDirectoryName(rawName);
+    if (!name) return { reply: `The project name "${rawName}" is not a safe directory name.`, handled: true };
+    let target: string;
+    try {
+      target = resolveWithinRootNotRoot(spokenPath ?? path.join(this.sandbox.root, name), this.sandbox);
+      if (path.dirname(target).toLowerCase() !== path.resolve(this.sandbox.root).toLowerCase()) throw new Error('a project build must target a direct child of the approved workspace root');
+    } catch (error) {
+      return { reply: `Astra cannot plan that project path: ${error instanceof Error ? error.message : String(error)}`, handled: true };
+    }
+    const request = analyseProjectRequest(message, name);
+    if (!existsSync(target)) return this.proposeProjectBuild(message, name, target, request);
+    if (!lstatSync(target).isDirectory()) return { reply: `${target} is not a real directory; Astra will not write through a file or link.`, handled: true };
+    return this.proposeExistingApplication(message, name, target, request, cancellation);
+  }
+
+  private async proposeExistingApplication(message: string, name: string, target: string, request: ReturnType<typeof analyseProjectRequest>, cancellation?: AbortSignal): Promise<ChatToolResult> {
+    const baseline = buildProjectScaffold(name, request.kind, request.stack);
+    const manifest = Object.keys(baseline);
+    try {
+      for (const file of manifest) resolveWithinRootNotRoot(path.join(target, file), { root: target });
+    } catch (error) {
+      return { reply: `Astra refused this workspace plan because a required React path crosses a link or leaves the project: ${error instanceof Error ? error.message : String(error)}`, handled: true };
+    }
+    const missing = manifest.filter((file) => !existsSync(path.join(target, file)));
+    const existing = readdirSync(target, { withFileTypes: true }).map((entry) => entry.name);
+    if (missing.length === 0 && !existsSync(path.join(target, 'node_modules', 'vite'))) return {
+      reply: `The React source files are present in ${target}, but the project remains incomplete: dependencies are unavailable and the build has not passed. Dependency installation needs separate approval; Astra has not overwritten any existing file.`,
+      handled: true,
+    };
+    const source = missing.filter((file) => file.startsWith('src/') && /\.(?:ts|tsx|css)$/.test(file));
+    let generated: Record<string, string>;
+    try {
+      generated = source.length ? await this.projectProposer(request.purpose, source, fetch, cancellation, request.stack, manifest) : {};
+    } catch (error) {
+      if (cancellation?.aborted) throw error;
+      const reason = `The local coding model could not prepare the missing React source: ${error instanceof Error ? error.message : String(error)}`;
+      await this.agent.beginTask({
+        objective: message.trim(), repository: target, proposedFiles: [], proposedWrites: [], proposedCommands: [],
+        application: { root: target, manifest, launchCommand: 'npm run dev', stack: request.stack },
+        rootCause: 'The requested project directory exists but the model proposal failed before any write.',
+        expectedOutcome: 'Retry the same objective with a validated, reviewable missing-file plan.', risks: [reason],
+      });
+      const failed = this.agent.fail(reason);
+      return { reply: `${reason}. The objective is retained for “Continue”; no file was changed or approved.`, handled: true, snapshot: failed };
+    }
+    const writes = missing.map((file) => ({ file, content: generated[file] ?? baseline[file] }));
+    const snapshot = await this.agent.beginTask({
+      objective: message.trim(), repository: target, proposedFiles: missing, proposedWrites: writes,
+      proposedCommands: [{ executable: 'npm', args: ['run', 'build'], purpose: 'Validate the completed React application when dependencies are available' }],
+      application: { root: target, manifest, launchCommand: 'npm run dev', stack: request.stack },
+      rootCause: 'The requested project directory exists but lacks a complete React application.',
+      expectedOutcome: `${target} contains the React application and npm run build passes when dependencies are available.`,
+      risks: ['Only missing files will be created. Existing files, including unrelated work, will not be overwritten.', 'Dependency installation is outside this approval.'],
+    });
+    return {
+      reply: `**Existing React project plan** for \`${target}\`. Found: ${existing.join(', ') || 'empty directory'}. Missing files to create: ${missing.join(', ') || 'none; this plan validates the existing application'}. ${source.length} source/style files were drafted by the local coding model. The exact file contents and one npm build command are in Coding for review. Existing files will be preserved. Approve the scoped plan in the visible app; chat permission alone does not grant authority. Dependencies remain separate.`,
+      handled: true, snapshot,
+    };
+  }
 
   /**
    * Investigate and produce a plan. Nothing is modified here; the plan must be
@@ -402,16 +507,26 @@ export class CodingBridge {
     // concrete, reviewable file list rather than an empty plan.
     const investigationHints = hints.length > 0 ? hints : await this.investigationHints();
     const proposedFiles = await this.candidateFiles(repository, investigationHints);
-    if (proposedFiles.length === 0) {
+    const newFile = intent.kind === 'add_feature' ? this.inferNewReactFile(repository, message) : null;
+    if (proposedFiles.length === 0 && !newFile) {
       return { reply: 'I could not identify a specific source file. Please name the failing test, function, or file so I can investigate safely.', handled: true };
     }
     if (path.basename(repository).toLowerCase() === 'astra' && proposedFiles.some((file) => /(^|\/)(approvals|pathGuard|commandRunner|codingAgent|codingBridge|codingModel|intelligenceService)(\/|\.|$)/i.test(file))) {
       return { reply: 'This request touches Astra’s coding security boundary. It needs separate owner authorisation before Astra can propose an edit to those files.', handled: true };
     }
-    let model;
+    let model: ModelProposal | null = null;
+    let writes: { file: string; content: string }[] = [];
     this.agent.setInvestigatingProposal(true);
     try {
-      model = await this.proposer(message.trim(), repository, proposedFiles, this.sandbox, fetch, cancellation);
+      if (newFile) {
+        const context = proposedFiles.slice(0, 2).map((file) => ({ file, content: readProjectFile(path.join(repository, file), { root: repository }, { maxBytes: 6000 }).text }));
+        const content = await this.fileProposer(message.trim(), path.join(repository, newFile), null, context, fetch, cancellation);
+        writes = [{ file: newFile, content: validateGeneratedFiles({ [newFile]: content }, [newFile], ['react', 'react-dom'])[newFile] }];
+      }
+      if (proposedFiles.length > 0 && (!newFile || /page$/i.test(path.basename(newFile, path.extname(newFile))))) {
+        const ordered = newFile ? [...proposedFiles].sort((a, b) => Number(/App\.(tsx|jsx)$/.test(b)) - Number(/App\.(tsx|jsx)$/.test(a))) : proposedFiles;
+        model = await this.proposer(newFile ? `${message.trim()} Integrate the new ${newFile} module into the existing application.` : message.trim(), repository, ordered, this.sandbox, fetch, cancellation);
+      }
     } catch (error) {
       if (cancellation?.aborted) throw error;
       return { reply: `I inspected the candidate files, but the coding model could not produce a validated patch: ${error instanceof Error ? error.message : String(error)}. Please narrow the task or give me the relevant file. No task was approved or changed.`, handled: true };
@@ -426,13 +541,14 @@ export class CodingBridge {
       // Candidate discovery was already completed above. Only the files in
       // the validated patch belong in the approval scope.
       searchHints: [],
-      proposedFiles: model.patches.map((patch) => patch.file),
-      proposedPatches: model.patches,
+      proposedFiles: [...(model?.patches.map((patch) => patch.file) ?? []), ...writes.map((write) => write.file)],
+      proposedPatches: model?.patches ?? [],
+      proposedWrites: writes,
       proposedCommands,
-      rootCause: model.rootCause,
-      expectedOutcome: model.expectedOutcome,
-      risks: model.risks,
-      branch: (await gitStatus(repository, this.sandbox)).clean ? `astra/${intent.kind}-${Date.now().toString(36)}` : null,
+      rootCause: model?.rootCause ?? 'A new component was requested.',
+      expectedOutcome: model?.expectedOutcome ?? `${newFile} contains the requested component.`,
+      risks: model?.risks ?? ['The new component must be reviewed before it is used elsewhere.'],
+      branch: null,
     });
 
     const plan = snapshot.plan;
@@ -444,10 +560,10 @@ export class CodingBridge {
       `**Objective:** ${plan.objective}`,
       plan.rootCause ? `**Assessment:** ${plan.rootCause}` : null,
       `**Files to change:** ${plan.filesToChange.join(', ')}`,
+      writes.length ? `**New file content:**\n\`\`\`\n${writes.map((write) => `${write.file}\n${write.content}`).join('\n')}\n\`\`\`` : null,
       `**Commands proposed:** ${plan.commands.length ? plan.commands.map((c) => `${c.executable} ${c.args.join(' ')}`).join(', ') : 'none'}`,
       `**Expected outcome:** ${plan.expectedOutcome}`,
       `**Risks:** ${plan.risks.join(' ')}`,
-      plan.branch ? `**Task branch:** \`${plan.branch}\`` : null,
       '',
       'Nothing has been changed and no command has been run. Approve this plan in chat or the Coding workspace, or tell Astra to cancel.',
     ].filter(Boolean).join('\n');
@@ -502,7 +618,7 @@ export class CodingBridge {
 
     const stack = extractStackHints(message);
     const scaffold = buildScaffold(name, stack);
-    // Astra can create files and local Git metadata. It has no tool that
+    // Astra can create files. It has no tool that
     // launches a process, so a request that also names a URL or a port is
     // answered honestly here instead of being allowed to imply a running site.
     const asksForService = /\bhttps?:\/\/|\blocalhost\b|\b127\.0\.0\.1\b|\bport\s+\d{2,5}\b|\b(?:dev|development|preview|web)\s+server\b/i.test(message);
@@ -521,11 +637,10 @@ export class CodingBridge {
       ...(renamed ? [renamed] : []),
       `- Stack: ${stack.length ? stack.join(', ') : 'plain Node.js'}`,
       `- Files that would be created: ${Object.keys(scaffold).join(', ')}`,
-      `- Git: initialised locally, with **no** remote created`,
       `- Availability: ${available ? 'destination is free' : `NOT AVAILABLE - ${reason}`}`,
       '',
       '**Dependency installation is currently blocked.** Package managers run arbitrary lifecycle scripts, so Astra will not run `npm install` or fetch remote packages. The scaffold will be created without installed dependencies, and Karl will need to install them manually.',
-      ...(asksForService ? ['', '**Astra cannot start a web server.** It writes files and initialises local Git, but it never launches a process, so it cannot make a URL available. After creation, ask Astra to check the address and it will open a real connection and report what it finds — or run the dev server yourself.'] : []),
+      ...(asksForService ? ['', '**Astra cannot start a web server.** Run the dev server yourself, then ask Astra to check the address.'] : []),
       '',
       available
         ? 'Review the Coding workspace proposal and approve to create it.'
@@ -537,7 +652,7 @@ export class CodingBridge {
       newRepository: { name, path: target, files: scaffold },
       proposedFiles: Object.keys(scaffold),
       rootCause: 'A new local project was requested.',
-      expectedOutcome: `${name} exists at ${target} with local Git metadata and the listed scaffold files.`,
+      expectedOutcome: `${name} exists at ${target} with the listed scaffold files.`,
       risks: ['Dependencies are declared but not installed. Install and build remain unverified until separately approved.'],
     });
     return { reply: lines.join('\n'), handled: true, snapshot };
@@ -559,17 +674,19 @@ export class CodingBridge {
       return { reply: `**Destination is not available.**\n\n\`${target}\` already exists, so Astra will not create or overwrite it. Choose a different name.`, handled: true };
     }
 
-    const baseline = buildProjectScaffold(name, request.kind);
+    const baseline = buildProjectScaffold(name, request.kind, request.stack);
     const manifest = Object.keys(baseline);
     const directories = [...new Set(manifest.map((file) => file.slice(0, Math.max(0, file.lastIndexOf('/')))).filter(Boolean))];
     // Validation is real: a syntax check per source file, then the test suite.
     const sourceFiles = manifest.filter((file) => /\.js$/.test(file) && !file.startsWith('test/')).slice(0, 8);
-    const commands = [
+    const commands = request.stack.includes('React')
+      ? [{ executable: 'npm', args: ['run', 'build'], purpose: 'Build the React application when dependencies are available' }]
+      : [
       ...sourceFiles.map((file) => ({ executable: 'node', args: ['--check', file], purpose: `Check ${file} parses` })),
       { executable: 'node', args: ['--test'], purpose: 'Run the project test suite' },
     ].slice(0, request.limits.maxCommands);
 
-    const launchCommand = request.kind === 'blog' ? 'node src/server.js' : 'node src/index.js';
+    const launchCommand = request.stack.includes('React') ? 'npm run dev' : request.kind === 'blog' ? 'node src/server.js' : 'node src/index.js';
 
     const lines = [
       `**Proposed project build**`,
@@ -577,7 +694,7 @@ export class CodingBridge {
       `- Absolute destination: \`${target}\``,
       `- Purpose: ${request.purpose}`,
       `- Kind: ${request.kind}`,
-      `- Stack preference: ${request.stack.length ? request.stack.join(', ') : 'plain Node.js, no dependencies'}`,
+      `- Stack: ${request.stack.includes('React') ? 'React, TypeScript and Vite' : request.stack.length ? request.stack.join(', ') : 'plain Node.js, no dependencies'}`,
       `- Directories to create: ${directories.length ? directories.join(', ') : 'the project root only'}`,
       `- Files to create (${manifest.length}): ${manifest.join(', ')}`,
       `- Commands to run (${commands.length}): ${commands.map((c) => `${c.executable} ${c.args.join(' ')}`).join('; ')}`,
@@ -592,7 +709,7 @@ export class CodingBridge {
       `- ${SEPARATE_APPROVAL_EXPLANATIONS.dependency_install}`,
       '- Network access, credentials, and anything outside this directory.',
       '',
-      `**After approval Astra will** create the directory, initialise a local Git repository with no remote and no commit, write and verify every file, run the validation commands, and repair failures within this scope up to ${request.limits.maxIterations} pass(es).`,
+      `**After approval Astra will** create the directory, write and verify every file, run available validation commands, and repair failures within this scope up to ${request.limits.maxIterations} pass(es).`,
       '',
       `**Launch it yourself with** \`${launchCommand}\` — Astra does not start servers.`,
       '',
@@ -615,11 +732,10 @@ export class CodingBridge {
         launchCommand,
       },
       proposedFiles: manifest,
-      expectedOutcome: `${target} exists with a local Git repository and the listed files, and every listed validation command passes.`,
+      expectedOutcome: `${target} exists with the listed files; available validation commands pass.`,
       rootCause: 'Karl asked for a project to be built from one request.',
       risks: [
-        'Dependencies are not installed; this project is written to run on the installed Node.js without any.',
-        'A Git repository is initialised locally with no remote and nothing is committed.',
+        request.stack.includes('React') ? 'React dependencies are declared but not installed; the build requires a separately approved installation or existing dependencies.' : 'This project runs on the installed Node.js without dependencies.',
         `The build is bounded to ${request.limits.maxIterations} validation pass(es), ${request.limits.maxWrites} writes and ${Math.round(request.limits.deadlineMs / 1000)}s.`,
       ],
     });
@@ -811,6 +927,18 @@ export class CodingBridge {
 
   // --------------------------------------------------------------- helpers
 
+  private inferNewReactFile(repository: string, message: string): string | null {
+    const match = /\b(?:add|create|build|implement)\s+(?:a|an|the)\s+([A-Za-z][A-Za-z0-9 ]{0,40}?)\s+(component|page)\b/i.exec(message);
+    if (!match) return null;
+    const files = listProjectFiles(repository, { root: repository }, { maxEntries: 150, maxDepth: 4 });
+    const extension = files.some((file) => file.relativePath.endsWith('.tsx')) ? 'tsx'
+      : files.some((file) => file.relativePath.endsWith('.jsx')) ? 'jsx' : null;
+    if (!extension) return null;
+    const name = match[1].trim().split(/\s+/).map((part) => part[0].toUpperCase() + part.slice(1)).join('');
+    const file = match[2].toLowerCase() === 'page' ? `src/pages/${name}Page.${extension}` : `src/components/${name}.${extension}`;
+    return existsSync(path.join(repository, file)) ? null : file;
+  }
+
   /** Read the project's own test script rather than guessing one. */
   private async detectTestCommand(repository: string): Promise<{ executable: string; args: readonly string[] } | null> {
     try {
@@ -820,8 +948,12 @@ export class CodingBridge {
       if (typeof test === 'string' && test.trim()) {
         return { executable: 'npm', args: ['test'] };
       }
+      if (typeof parsed.scripts?.build === 'string' && parsed.scripts.build.trim()) return { executable: 'npm', args: ['run', 'build'] };
     } catch {
       // Not a Node project, or unreadable; no command is proposed.
+    }
+    if (existsSync(path.join(repository, 'artisan')) && existsSync(path.join(repository, 'vendor', 'autoload.php'))) {
+      return { executable: 'php', args: ['artisan', 'test'] };
     }
     return null;
   }
@@ -893,7 +1025,6 @@ export function buildScaffold(name: string, stack: readonly string[]): Record<st
   const isReact = stack.includes('React');
   const files: Record<string, string> = {
     'README.md': `# ${name}\n\nLocal scaffold created by Astra. Dependencies are declared but not installed. Review package versions and approve installation separately before running the app.\n`,
-    '.gitignore': 'node_modules/\ndist/\n*.log\n',
   };
   if (isReact && isTs) {
     files['package.json'] = `${JSON.stringify({

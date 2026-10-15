@@ -208,7 +208,8 @@ const RULES: readonly Rule[] = [
   { kind: 'edit_file', pattern: /\b(edit|update|change|replace)\b.*(?:\bfile\b|\bcontents?\b|\bfunction\b|\.[A-Za-z0-9]{1,8}\b)/i },
   { kind: 'read_file', pattern: /\b(read|show|display)\b.*(?:\bfile\b|\.[A-Za-z0-9]{1,8}\b)/i },
   { kind: 'read_file', pattern: /\b(?:does|is)\b.*\bfile\b.*\b(?:exist|there|present)\b/i },
-  { kind: 'create_file', pattern: /\b(create|make|add)\b.*(?:\bfile\b|\bcomponent\b|\bcontroller\b|\bREADME\b|\.[A-Za-z0-9]{1,8}\b)/i },
+  { kind: 'create_file', pattern: /\b(?:create|make|add)\b.*\bVue\b.*\bcomponent\b|\b(?:create|make|add)\b.*\bLaravel\b.*\bcontroller\b/i },
+  { kind: 'create_file', pattern: /\b(create|make|add)\b.*(?:\bfile\b|\bREADME\b|\.[A-Za-z0-9]{1,8}\b)/i },
   { kind: 'write_file', pattern: /\b(write|save)\b.*(?:\bfile\b|\bREADME\b|\.[A-Za-z0-9]{1,8}\b)/i },
   // A request to make something must be recognised however Karl names it. The
   // earlier defect: the noun list stopped at "site", so "create a blog called
@@ -224,6 +225,7 @@ const RULES: readonly Rule[] = [
   // "create a new repository called X" also matches, but only after the more
   // specific "called/named X" form below has had a chance to run.
   { kind: 'create_repository', pattern: /\b(?:create|make|scaffold|start)\b.*\brepositor(y|ies)\b/i },
+  { kind: 'add_feature', pattern: /\b(?:build|add|implement|develop)\b.*\bLaravel\b.*\bAPI\b.*\b(?:in|inside)\b/i },
   { kind: 'investigate_tests', pattern: /\b(investigate|why (is|are|do|does)|debug|diagnose|look into|examine)\b.*\b(test|tests|failing|failure|error)\b/i },
   { kind: 'investigate_tests', pattern: /\btest(s)? (are )?(failing|broken)\b/i },
   { kind: 'fix_bug', pattern: /\b(fix|repair|resolve|correct|solve|patch)\b/i },
@@ -264,6 +266,8 @@ export function extractRepositoryHint(text: string): string | null {
     /\brepo(?:sitory)?\s+["'`]([A-Za-z][A-Za-z0-9_.-]{1,40})["'`]/i,
     // "fix the bug in BrightSpeakAPI", "investigate tests in DemoApp"
     /\b(?:fix|repair|investigate|debug|examine|review|open|check)\b[^,.]*?\bin\s+(?:the\s+)?([A-Za-z][A-Za-z0-9_.-]{1,40})\b/i,
+    /\b(?:in|inside)\s+(?:my\s+|the\s+)?([A-Za-z][A-Za-z0-9_.-]{1,40})\s+folder\b/i,
+    /\b(?:to|in|inside)\s+([A-Z][A-Za-z0-9_.-]{1,40})\b/,
   ];
   for (const pattern of patterns) {
     const match = pattern.exec(text);
@@ -432,7 +436,21 @@ const PATH_SPEECH_MARKERS = 'exist|exists|existed|is|are|was|were|there|still|no
 function trimPathTail(raw: string, extraWords: string): string {
   const run = /((?:\s+\S+)+)$/.exec(raw)?.[1];
   if (!run) return raw;
+  const clauseBoundary = new Set(String.raw`${NAME_CLAUSE_END}`.split('|'));
   const tokens = run.trim().split(/\s+/);
+  // Stop the path at the first clause connector so natural-language speech
+  // after an unquoted path ('...astraBlog and tell me which files') cannot
+  // be swallowed into it. The path's own spaces are preserved either side.
+  let cut = tokens.length;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const word = tokens[i].toLowerCase().replace(/[^a-z']/g, '');
+    if (clauseBoundary.has(word)) { cut = i; break; }
+  }
+  if (cut < tokens.length) {
+    // Drop the run's tail from the raw path.
+    const droppedChars = tokens.slice(cut).reduce((t, tok) => t + tok.length + 1, 0);
+    return raw.slice(0, raw.length - droppedChars).replace(/[,;:]+$/, '');
+  }
   const trimmable = new RegExp(String.raw`^(?:${extraWords ? `${extraWords}|` : ''}${PATH_FUNCTION_WORDS})$`, 'i');
   const speech = new RegExp(String.raw`^(?:${PATH_SPEECH_MARKERS})$`, 'i');
 

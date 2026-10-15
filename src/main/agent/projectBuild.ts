@@ -97,7 +97,7 @@ export function analyseProjectRequest(message: string, name: string | null): Pro
 }
 
 /** Extensions the generated project may contain. */
-const ALLOWED_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.json', '.md', '.html', '.css', '.txt', '.yml']);
+const ALLOWED_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.json', '.md', '.html', '.css', '.txt', '.yml']);
 
 /**
  * Validate a map of generated files against the approved manifest.
@@ -107,7 +107,7 @@ const ALLOWED_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.json', '.md', '.htm
  * are matched exactly against the manifest, so a model cannot introduce a new
  * location, a traversal or a symlink target.
  */
-export function validateGeneratedFiles(raw: unknown, manifest: readonly string[]): Record<string, string> {
+export function validateGeneratedFiles(raw: unknown, manifest: readonly string[], allowedPackages?: readonly string[]): Record<string, string> {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new Error('the coding model did not return a file map');
   const allowed = new Set(manifest.map((file) => file.replace(/\\/g, '/')));
   const result: Record<string, string> = {};
@@ -119,6 +119,14 @@ export function validateGeneratedFiles(raw: unknown, manifest: readonly string[]
     if (value.includes('\u0000')) throw new Error(`generated ${file} contains a null byte`);
     const extension = file.slice(file.lastIndexOf('.')).toLowerCase();
     if (!ALLOWED_EXTENSIONS.has(extension)) throw new Error(`generated ${file} has a disallowed extension`);
+    if (allowedPackages && /\.(?:js|jsx|ts|tsx)$/.test(file)) {
+      const imports = [...value.matchAll(/(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)['"]([^'"]+)['"]/g)].map((match) => match[1]);
+      for (const imported of imports) {
+        if (!imported.startsWith('.') && !imported.startsWith('/') && !allowedPackages.some((name) => imported === name || imported.startsWith(`${name}/`))) {
+          throw new Error(`generated ${file} imports undeclared package ${imported}`);
+        }
+      }
+    }
     result[file] = value;
   }
   if (Object.keys(result).length === 0) throw new Error('the coding model produced no usable files');
@@ -133,8 +141,29 @@ export function validateGeneratedFiles(raw: unknown, manifest: readonly string[]
  * is working without any package installation — which matters because
  * dependency installation remains separately authorised and blocked.
  */
-export function buildProjectScaffold(name: string, kind: ProjectKind): Record<string, string> {
+export function buildProjectScaffold(name: string, kind: ProjectKind, stack: readonly string[] = []): Record<string, string> {
+  if (stack.includes('React')) return reactProject(name);
   return kind === 'blog' ? blogProject(name) : genericProject(name, kind);
+}
+
+function reactProject(name: string): Record<string, string> {
+  const packageName = name.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+  return {
+    'package.json': `${JSON.stringify({
+      name: packageName, version: '0.1.0', private: true, type: 'module',
+      scripts: { dev: 'vite', build: 'vite build' },
+      dependencies: { react: '^19.3.0', 'react-dom': '^19.3.0' },
+      devDependencies: { vite: '^8.3.4', typescript: '^6.0.3', '@types/react': '^19.3.0', '@types/react-dom': '^19.3.0' },
+    }, null, 2)}\n`,
+    'index.html': '<!doctype html>\n<html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>' + name + '</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>\n',
+    'tsconfig.json': `${JSON.stringify({ compilerOptions: { target: 'ES2022', lib: ['ES2022', 'DOM', 'DOM.Iterable'], module: 'ESNext', moduleResolution: 'Bundler', jsx: 'react-jsx', strict: true, skipLibCheck: true, noEmit: true }, include: ['src'] }, null, 2)}\n`,
+    'src/main.tsx': `import React from 'react';\nimport { createRoot } from 'react-dom/client';\nimport App from './App';\nimport './styles.css';\n\ncreateRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);\n`,
+    'src/App.tsx': `import { useState } from 'react';\nimport Navigation from './components/Navigation';\nimport HomePage from './pages/HomePage';\nimport AboutPage from './pages/AboutPage';\n\nexport default function App() {\n  const [page, setPage] = useState<'home' | 'about'>('home');\n  return <><Navigation current={page} onNavigate={setPage} /><main>{page === 'home' ? <HomePage /> : <AboutPage />}</main></>;\n}\n`,
+    'src/components/Navigation.tsx': `type Page = 'home' | 'about';\nexport default function Navigation({ current, onNavigate }: { current: Page; onNavigate: (page: Page) => void }) {\n  return <nav aria-label="Main navigation"><button aria-current={current === 'home' ? 'page' : undefined} onClick={() => onNavigate('home')}>Home</button><button aria-current={current === 'about' ? 'page' : undefined} onClick={() => onNavigate('about')}>About</button></nav>;\n}\n`,
+    'src/pages/HomePage.tsx': `export default function HomePage() {\n  return <section><h1>Welcome to ${name}</h1><p>Explore the homepage and learn more about this project.</p></section>;\n}\n`,
+    'src/pages/AboutPage.tsx': `export default function AboutPage() {\n  return <section><h1>About ${name}</h1><p>This site is built with React and TypeScript.</p></section>;\n}\n`,
+    'src/styles.css': `:root { font-family: system-ui, sans-serif; color: #f5f3ff; background: #171126; } body { margin: 0; } nav { display: flex; gap: 1rem; padding: 1rem 2rem; background: #291c43; } button { color: inherit; background: #493172; border: 0; border-radius: .5rem; padding: .7rem 1rem; cursor: pointer; } button[aria-current="page"] { background: #7651b6; } main { max-width: 70rem; margin: 4rem auto; padding: 0 2rem; }\n`,
+  };
 }
 
 function blogProject(name: string): Record<string, string> {
@@ -149,7 +178,6 @@ function blogProject(name: string): Record<string, string> {
       engines: { node: '>=18' },
     }, null, 2)}\n`,
 
-    '.gitignore': 'node_modules/\n*.log\n.DS_Store\n',
 
     'src/posts.js': `'use strict';
 
@@ -514,7 +542,6 @@ function genericProject(name: string, kind: ProjectKind): Record<string, string>
       scripts: { start: 'node src/index.js', test: 'node --test' },
       engines: { node: '>=18' },
     }, null, 2)}\n`,
-    '.gitignore': 'node_modules/\n*.log\n.DS_Store\n',
     'src/index.js': `'use strict';
 
 /** The project's real entry point. */
@@ -546,7 +573,8 @@ test('the project describes itself', () => {
 }
 
 /** The README written last, once the real validation results are known. */
-export function buildProjectReadme(name: string, command: string, validated: boolean, detail: string): string {
+export function buildProjectReadme(name: string, command: string, validated: boolean, detail: string, stack: readonly string[] = []): string {
+  const react = stack.includes('React');
   return [
     `# ${name}`,
     '',
@@ -561,13 +589,12 @@ export function buildProjectReadme(name: string, command: string, validated: boo
     '## Test it',
     '',
     '```powershell',
-    'node --test',
+    react ? 'npm run build' : 'node --test',
     '```',
     '',
     '## Dependencies',
     '',
-    'This project has none. It runs on the Node.js already installed, so there is',
-    'nothing to install and nothing to fetch from the network.',
+    react ? 'React, TypeScript and Vite are declared in package.json. Install dependencies separately before running the development server or build.' : 'This project has no dependencies. It runs on the installed Node.js.',
     '',
     '## What was verified',
     '',
