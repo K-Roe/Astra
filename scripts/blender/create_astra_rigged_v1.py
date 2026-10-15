@@ -633,17 +633,52 @@ def build_clips(arm, face):
             (
                 frame,
                 {
+                    "thigh.L": (1.42, 0, .06),
+                    "thigh.R": (1.42, 0, -.06),
+                    "shin.L": (-1.38, 0, 0),
+                    "shin.R": (-1.38, 0, 0),
+                    "foot.L": (0, .16, 0),
+                    "foot.R": (0, .16, 0),
+                    "spine_lower": (.12, 0, 0),
                     "spine_mid": (bob * 0.020, 0, 0),
                     "chest": (bob * 0.026, 0, 0),
                     "neck": (-bob * 0.014, 0, 0),
                     "head": (-bob * 0.010, math.sin(t * 0.5) * 0.090, 0),
                     "shoulder.L": (0, bob * 0.020, 0),
                     "shoulder.R": (0, -bob * 0.020, 0),
+                    "upperarm.L": (-.55, 0, -.10),
+                    "upperarm.R": (-.55, 0, .10),
+                    "lowerarm.L": (.85, 0, 0),
+                    "lowerarm.R": (.85, 0, 0),
                 },
             )
         )
     clips["seated_idle"] = author_clip(
         arm, "seated_idle", keys, location_keys=[(1, {"hips": (0, 0, SIT_HIP_Z)})]
+    )
+
+    # V1 remains a usable rollback during real desk work. The older seated
+    # leg pose is preserved; restrained wrists and alternating fingers read
+    # as typing without moving the hands through a full keyboard stroke.
+    desk_keys = []
+    for frame in range(1, 122, 5):
+        phase = (frame - 1) / 120
+        typing = 1 if .12 < phase < .38 or .52 < phase < .80 else 0
+        left = typing * math.sin((frame - 1) / 20 * math.tau)
+        right = typing * math.sin((frame - 1) / 20 * math.tau + math.pi)
+        desk_keys.append((frame, {
+            "thigh.L": (1.42, 0, .06), "thigh.R": (1.42, 0, -.06),
+            "shin.L": (-1.38, 0, 0), "shin.R": (-1.38, 0, 0),
+            "spine_lower": (.12, 0, 0), "head": (.06, .025 * math.sin(phase * math.tau), 0),
+            "upperarm.L": (-1.15, 0, -.15), "upperarm.R": (-1.15, 0, .15),
+            "lowerarm.L": (.42 + .035 * left, 0, 0),
+            "lowerarm.R": (.42 + .035 * right, 0, 0),
+            "hand.L": (.035 * left, 0, 0), "hand.R": (.035 * right, 0, 0),
+            "index_1.L": (.08 * left, 0, 0), "middle_1.L": (.06 * right, 0, 0),
+            "index_1.R": (.08 * right, 0, 0), "middle_1.R": (.06 * left, 0, 0),
+        }))
+    clips["desk_work"] = author_clip(
+        arm, "desk_work", desk_keys, location_keys=[(1, {"hips": (0, 0, SIT_HIP_Z)})]
     )
 
     # 12. thinking -----------------------------------------------------------

@@ -49,7 +49,7 @@ export function AvatarPanel({
       return 'astra-character-v1';
     }
   });
-  const working = activity === 'coding' || activity === 'learning';
+  const working = activity === 'coding' || activity === 'learning' || activity === 'planning';
 
   function selectCharacter(id: CharacterAssetId): void {
     if (working || id === assetId) return;

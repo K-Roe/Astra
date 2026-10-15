@@ -148,7 +148,7 @@ export class CharacterController {
       this.returnToCentre();
       return;
     }
-    if (this.activity === 'coding' || this.activity === 'learning') {
+    if (this.isDeskActivity()) {
       if (event === 'chat_reply' || event === 'user_wave') this.applyMorph('smile', 1);
       return;
     }
@@ -160,20 +160,20 @@ export class CharacterController {
     const previous = this.activity;
     this.activity = activity;
     this.scheduler.reset();
-    if (activity === 'coding' || activity === 'learning') {
+    if (this.isDeskActivity()) {
       this.ensureWorkJourney();
-    } else if ((previous === 'coding' || previous === 'learning') && (this.state === 'walking' || this.state === 'turning')) {
+    } else if (previous !== 'idle' && (this.state === 'walking' || this.state === 'turning')) {
       this.clearPath();
       this.enter('idle', this.state, 'go_to');
     } else if (this.state === 'seated' && this.seatId === 'desk_seat') {
       this.playClip('seated_idle', true);
-      if (previous === 'coding' || previous === 'learning') this.applyMorph('happy', 1);
+      if (previous !== 'idle') this.applyMorph('happy', 1);
     }
   }
 
   setIdleEnabled(enabled: boolean): void {
     this.scheduler.setEnabled(enabled);
-    if (enabled || this.activity === 'coding' || this.activity === 'learning') return;
+    if (enabled || this.isDeskActivity()) return;
     // Stop where she is. Disabling idle activities must not make her walk:
     // if she is on a seat she still needs to stand up first.
     if (this.state === 'seated') {
@@ -191,7 +191,7 @@ export class CharacterController {
 
   /** Return to the middle of the room and face the user. */
   returnToCentre(): void {
-    if (this.activity === 'coding' || this.activity === 'learning') return;
+    if (this.isDeskActivity()) return;
     if (this.state === 'seated') {
       this.applyEvent('leave_seat');
       return;
@@ -209,7 +209,7 @@ export class CharacterController {
     this.asset.mixer.update(clamped);
     this.updateBlink(clamped);
     this.updateNavigation(clamped);
-    if (this.activity === 'coding' || this.activity === 'learning') this.ensureWorkJourney();
+    if (this.isDeskActivity()) this.ensureWorkJourney();
     this.updateIdleScheduler(clamped);
     this.updateOneShotCompletion();
   }
@@ -382,13 +382,13 @@ export class CharacterController {
       this.seatId = null;
       this.destination = null;
       this.applyEvent('stand_done');
-      if (this.activity === 'coding' || this.activity === 'learning') this.beginJourney('desk_seat');
+      if (this.isDeskActivity()) this.beginJourney('desk_seat');
       else this.leaveSeatIfNeeded();
     }
   }
 
   private finishWalk(): void {
-    if ((this.activity === 'coding' || this.activity === 'learning') && this.destination !== 'desk_seat') {
+    if (this.isDeskActivity() && this.destination !== 'desk_seat') {
       this.beginJourney('desk_seat');
       return;
     }
@@ -417,7 +417,7 @@ export class CharacterController {
   private updateIdleScheduler(deltaSeconds: number): void {
     // A plan awaiting Karl's approval is not executable work. She can relax
     // normally while waiting, including leaving the desk after a cooldown.
-    if (this.activity === 'coding' || this.activity === 'learning') return;
+    if (this.isDeskActivity()) return;
     if (isChatDriven(this.state) || this.state === 'waving') {
       this.scheduler.reset();
       return;
@@ -456,7 +456,9 @@ export class CharacterController {
   /** Work can preempt idle at a stable waypoint, but never starts a second path. */
   private ensureWorkJourney(): void {
     if (this.state === 'seated' && this.seatId === 'desk_seat') {
-      const clip = this.asset.clips.has('desk_work') ? 'desk_work' : 'thinking';
+      const clip = this.activity === 'awaiting_approval'
+        ? 'seated_idle'
+        : this.asset.clips.has('desk_work') ? 'desk_work' : 'thinking';
       if (this.currentClipName !== clip) this.playClip(clip, true);
       return;
     }
@@ -466,6 +468,10 @@ export class CharacterController {
     }
     if (['sitting_down', 'standing_up', 'walking', 'turning'].includes(this.state)) return;
     this.beginJourney('desk_seat');
+  }
+
+  private isDeskActivity(): boolean {
+    return this.activity === 'planning' || this.activity === 'awaiting_approval' || this.activity === 'coding' || this.activity === 'learning';
   }
 
   private rotateToward(targetFacing: number, deltaSeconds: number): boolean {

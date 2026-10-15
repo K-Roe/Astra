@@ -29,12 +29,52 @@ function character(idleRandom = () => 0.5) {
 }
 
 test('only real active work maps to desk-work presentation', () => {
+  assert.equal(worldActivityFor('investigating', false), 'planning');
+  assert.equal(worldActivityFor('planning', false), 'planning');
   assert.equal(worldActivityFor('awaiting_approval', false), 'awaiting_approval');
   assert.equal(worldActivityFor('implementing', false), 'coding');
   assert.equal(worldActivityFor('testing', false), 'coding');
   assert.equal(worldActivityFor('completed', false), 'idle');
   assert.equal(worldActivityFor(null, true), 'learning');
   assert.equal(worldActivityFor('testing', true), 'coding');
+});
+
+test('planning walks to the desk, approval waits without typing, and approved work resumes', () => {
+  const { controller, advance } = character();
+  controller.setActivity('planning');
+  advance(8);
+  assert.equal(controller.getDiagnostics().waypoint, 'desk_seat');
+  assert.equal(controller.getDiagnostics().clip, 'desk_work');
+  controller.setActivity('awaiting_approval');
+  advance(1);
+  assert.equal(controller.getDiagnostics().state, 'seated');
+  assert.equal(controller.getDiagnostics().clip, 'seated_idle');
+  controller.setActivity('coding');
+  advance(0.2);
+  assert.equal(controller.getDiagnostics().clip, 'desk_work');
+  controller.setActivity('idle');
+  assert.equal(controller.getDiagnostics().clip, 'seated_idle');
+  controller.dispose();
+});
+
+test('approval arriving or cancellation during the walk does not teleport', () => {
+  const { controller, advance } = character();
+  controller.setActivity('planning');
+  advance(0.5);
+  const before = controller.getDiagnostics().position;
+  controller.setActivity('awaiting_approval');
+  advance(0.5);
+  const waiting = controller.getDiagnostics().position;
+  assert.ok(Math.hypot(waiting.x - before.x, waiting.z - before.z) < 1.5);
+  controller.setActivity('coding');
+  advance(0.5);
+  controller.setActivity('idle');
+  const cancelled = controller.getDiagnostics().position;
+  advance(0.1);
+  const after = controller.getDiagnostics().position;
+  assert.ok(Math.hypot(after.x - cancelled.x, after.z - cancelled.z) < 0.3);
+  assert.notEqual(controller.getDiagnostics().clip, 'desk_work');
+  controller.dispose();
 });
 
 test('active coding walks the single character to the desk and survives chat acknowledgement', () => {

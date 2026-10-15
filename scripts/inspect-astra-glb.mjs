@@ -126,11 +126,11 @@ export function inspectCharacterGlb(file) {
   };
 }
 
-/** Required clip names for the LW-02C animation library. */
+/** Required clips shared by the V1 rollback rig and V2 preview. */
 export const REQUIRED_CLIPS = [
   'idle_breathing', 'idle_weight_shift', 'idle_look_around', 'blink', 'walk',
   'turn_left', 'turn_right', 'wave', 'sit_down', 'seated_idle', 'stand_up',
-  'thinking', 'listening', 'talking_gesture', 'happy_reaction',
+  'thinking', 'listening', 'talking_gesture', 'happy_reaction', 'desk_work',
 ];
 
 /** Required morph targets for facial animation and future lip-sync. */

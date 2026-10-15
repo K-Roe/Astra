@@ -105,6 +105,7 @@ export class CodingAgent extends EventEmitter {
   private taskId: number | null = null;
   private repository: string | null = null;
   private phase: CodingPhase = 'idle';
+  private investigatingProposal = false;
   private plan: ProposedPlan | null = null;
   private approvalRequested = false;
   private approvedFingerprint: string | null = null;
@@ -156,6 +157,12 @@ export class CodingAgent extends EventEmitter {
 
   getRepository(): string | null {
     return this.repository;
+  }
+
+  /** Read-only model proposal in progress, before a validated plan exists. */
+  setInvestigatingProposal(active: boolean): void {
+    this.investigatingProposal = active;
+    this.emitEvent(active ? 'proposal.investigating' : 'proposal.settled', active ? 'Investigating source for a coding plan.' : 'Coding proposal investigation ended.', true);
   }
 
   // ------------------------------------------------------------- planning
@@ -713,7 +720,7 @@ export class CodingAgent extends EventEmitter {
       taskId: this.taskId,
       repository: this.repository,
       objective: this.taskId ? this.tasks.get(this.taskId)?.objective ?? null : null,
-      phase: this.phase,
+      phase: this.investigatingProposal ? 'investigating' : this.phase,
       plan: this.plan,
       approval: { requested: this.approvalRequested, approved: this.approvedFingerprint !== null, scopeFingerprint: this.approvedFingerprint },
       changes: (this.taskId ? this.tasks.get(this.taskId)?.changes ?? [] : []) as TaskSnapshot['changes'],

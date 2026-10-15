@@ -90,7 +90,7 @@ const RULES: readonly Rule[] = [
   { kind: 'show_changes', pattern: /\b(show|display|see)\b.*\b(what you changed|your changes|diff|changes)\b|\bgit diff\b|\bshow me the diff\b/i },
   { kind: 'list_repositories', pattern: /\b(list|show|what are)\b.*\b(repositor(y|ies)|projects)\b|\bmy repositor/i },
   { kind: 'run_tests', pattern: /\b(run|execute)\b.*\b(test|tests|test suite|npm test)\b/i },
-  { kind: 'create_repository', pattern: /\b(create|make|start|scaffold|set up|new)\b.*\b(repositor|project|app|application|dashboard|service|site)\b/i },
+  { kind: 'create_repository', pattern: /\b(create|make|start|scaffold|set up|new)\b.*\b(repo(?:sitory|sitories)?|project|app|application|dashboard|service|site)\b/i },
   // "create a new repository called X" also matches, but only after the more
   // specific "called/named X" form below has had a chance to run.
   { kind: 'create_repository', pattern: /\b(?:create|make|scaffold|start)\b.*\brepositor(y|ies)\b/i },
@@ -195,12 +195,11 @@ export function sanitiseSearchTerm(raw: string): string | null {
 export function extractNewRepositoryName(text: string): string | null {
   const patterns = [
     /\b(?:called|named)\s+["'`]?([A-Za-z][A-Za-z0-9_.-]{1,40})["'`]?/i,
-    /\b(?:create|make|new|scaffold)\s+(?:a|an)?\s*[A-Za-z ]*?\b([A-Z][A-Za-z0-9_]{1,39})\b/,
   ];
   for (const pattern of patterns) {
     const match = pattern.exec(text);
     if (!match) continue;
-    const candidate = match[1];
+    const candidate = match[1].replace(/[.,!?;:]+$/, '');
     if (candidate.length < 2) continue;
     return candidate;
   }

@@ -601,16 +601,26 @@ def clips_v2(arm, face):
                  "lowerarm.L": (.55, 0, 0), "lowerarm.R": (.55, 0, 0)})
         for frame in (1, 31, 61, 91)
     ], location_keys=[(1, {"hips": (0, 0, -.47)})])
-    clips["desk_work"] = rig.author_clip(arm, "desk_work", [
-        (frame, {**sit, "spine_lower": (.09, 0, 0),
-                 "head": (.08 + .025 * math.sin((frame - 1) / 60 * math.tau), 0, 0),
-                 "upperarm.L": (-1.18, 0, -.18), "upperarm.R": (-1.18, 0, .18),
-                 "lowerarm.L": (.34 + .06 * math.sin((frame - 1) / 15 * math.tau), 0, 0),
-                 "lowerarm.R": (.34 - .06 * math.sin((frame - 1) / 15 * math.tau), 0, 0),
-                 "hand.L": (.05 * math.sin((frame - 1) / 10 * math.tau), 0, 0),
-                 "hand.R": (-.05 * math.sin((frame - 1) / 10 * math.tau), 0, 0)})
-        for frame in range(1, 62, 5)
-    ], location_keys=[(1, {"hips": (0, 0, -.47)})])
+    desk_keys = []
+    for frame in range(1, 122, 5):
+        phase = (frame - 1) / 120
+        typing = 1 if .12 < phase < .38 or .52 < phase < .80 else 0
+        left = typing * math.sin((frame - 1) / 20 * math.tau)
+        right = typing * math.sin((frame - 1) / 20 * math.tau + math.pi)
+        desk_keys.append((frame, {**sit,
+            "spine_lower": (.11, 0, 0), "chest": (.035, 0, 0),
+            "head": (.075 + .015 * math.sin(phase * math.tau), .025 * math.sin(phase * math.tau), 0),
+            "eye.L": (0, .025 * math.sin(phase * math.tau), 0),
+            "eye.R": (0, .025 * math.sin(phase * math.tau), 0),
+            "upperarm.L": (-1.16, 0, -.16), "upperarm.R": (-1.16, 0, .16),
+            "lowerarm.L": (.40 + .035 * left, 0, 0),
+            "lowerarm.R": (.40 + .035 * right, 0, 0),
+            "hand.L": (.035 * left, 0, 0), "hand.R": (.035 * right, 0, 0),
+            "index_1.L": (.09 * left, 0, 0), "middle_1.L": (.07 * right, 0, 0),
+            "index_1.R": (.09 * right, 0, 0), "middle_1.R": (.07 * left, 0, 0),
+        }))
+    clips["desk_work"] = rig.author_clip(arm, "desk_work", desk_keys,
+                                         location_keys=[(1, {"hips": (0, 0, -.47)})])
     clips["stretch"] = rig.author_clip(arm, "stretch", [
         (1, {"upperarm.L": (0, 0, 0), "upperarm.R": (0, 0, 0)}),
         (15, {"upperarm.L": (-2.1, 0, -.22), "upperarm.R": (-2.1, 0, .22),

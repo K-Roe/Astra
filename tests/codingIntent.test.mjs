@@ -68,6 +68,18 @@ test('repository creation is recognised', () => {
   assert.equal(routeCodingIntent('Create a new repository called MyDashboard').kind, 'create_repository');
   assert.equal(extractNewRepositoryName('Create a new repository called MyDashboard'), 'MyDashboard');
   assert.equal(extractNewRepositoryName('create a React app named BrightBoard'), 'BrightBoard');
+  for (const request of [
+    'Create a repository called AstraStone.',
+    'Make me a new project named AstraStone.',
+    'Start a new Git repo called AstraStone.',
+    'Create a React and TypeScript project called AstraStone.',
+    'Set up a new project for me.',
+    'Can you create a repository?',
+  ]) assert.equal(routeCodingIntent(request).kind, 'create_repository', request);
+  assert.equal(extractNewRepositoryName('Create a new Git repository called AstraStone.'), 'AstraStone');
+  assert.equal(extractNewRepositoryName('Set up a new project for me.'), null);
+  assert.equal(extractNewRepositoryName('Create a new Git repository.'), null);
+  assert.equal(extractNewRepositoryName('Can you create a repository?'), null);
 });
 
 test('stack hints are extracted for the scaffold proposal', () => {

@@ -37,7 +37,7 @@ test('the skeleton carries the bones the character controller drives', () => {
   assert.ok(report.boneCount >= 40, `expected a full body rig, found ${report.boneCount} bones`);
 });
 
-test('all fifteen animation clips are exported with real channels', () => {
+test('all sixteen animation clips are exported with real channels', () => {
   for (const clip of REQUIRED_CLIPS) {
     assert.ok(report.clipNames.includes(clip), `missing clip ${clip}`);
   }

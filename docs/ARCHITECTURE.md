@@ -1,5 +1,9 @@
 # Project ASTRA architecture
 
+## 2026-10-15 conversational coding correction
+
+The normal composer still calls trusted `ChatService` IPC. Deterministic `codingIntent.ts` routes new-repository requests, including “repo” phrasing, to `CodingBridge`; it does not grant authority. `CodingAgent` creates a scoped plan without a selected repository, and only explicit approval reaches `IntelligenceService.executeApproved` for contained file creation and local Git initialisation. The acceptance-only repository root override is guarded by the acceptance flag, disposable profile and TEMP containment. A genuine in-flight coding proposal sets a transient investigation phase; `App` polls the same task snapshot and gives the read-only activity to the one world controller. This presentation path cannot approve or execute work.
+
 ## LW-03 UI and world correction (2026-10-15)
 
 Chat history still lives only in the running `ChatService`. Its `ChatStatus` now reports `memoryAvailable` and the active count from a successful read of the persistent Personal Memory service; the renderer labels conversation history and personal memory separately. `MemoryCommands` answers questions about Astra's own memory persistence from that service before model generation or research retrieval. The V2 selector stores only the preview asset id in renderer local storage, while V1 remains the fresh-profile default. Changing rigs is disabled during coding or learning work. The chair's side approach and negative-Z seated facing share `HOME_ROOM` with the visible chair and monitor. `homeCamera.ts` provides the closer default companion view plus follow, close, full-home, desk front, desk side and overhead views; the existing capped Three.js viewport remains the sole renderer.

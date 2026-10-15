@@ -188,14 +188,15 @@ try {
   page = connect(target.webSocketDebuggerUrl);
   await Promise.all([browser.ready, page.ready]);
 await new Promise((r) => setTimeout(r, 5000));
-  const selectedPreview = await bridgeEval(page, "(()=>{const s=document.querySelector('.character-version-select select'); if(!s)return false; s.value='astra-character-v2'; s.dispatchEvent(new Event('change',{bubbles:true})); return true})()");
+  const requestedCharacter = process.argv.includes('--character-v1') ? 'astra-character-v1' : 'astra-character-v2';
+  const selectedPreview = await bridgeEval(page, `(()=>{const s=document.querySelector('.character-version-select select'); if(!s)return false; s.value=${JSON.stringify(requestedCharacter)}; s.dispatchEvent(new Event('change',{bubbles:true})); return true})()`);
   const previewDeadline = Date.now() + 10000;
   let previewReady = false;
   while (Date.now() < previewDeadline && !previewReady) {
-    previewReady = await bridgeEval(page, "document.querySelector('.character-version-select select')?.value==='astra-character-v2' && document.querySelector('.world-viewport')?.dataset.characterAsset==='ready'");
+    previewReady = await bridgeEval(page, `document.querySelector('.character-version-select select')?.value===${JSON.stringify(requestedCharacter)} && document.querySelector('.world-viewport')?.dataset.characterAsset==='ready'`);
     if (!previewReady) await new Promise((r) => setTimeout(r, 150));
   }
-  record('LW03', 'V2 preview loads through the real asset selector', selectedPreview && previewReady);
+  record('LW03', `${requestedCharacter} loads through the real asset selector`, selectedPreview && previewReady);
   if (previewReady) await captureLw03(page, 'home-preview-native.png');
 
   const chat = (text) => bridgeEval(page, `window.astra.sendMessage(${JSON.stringify(text)}).then(s=>JSON.stringify({ok:true})).catch(e=>JSON.stringify({ok:false,error:e.message}))`);
@@ -261,10 +262,12 @@ await new Promise((r) => setTimeout(r, 5000));
   let snapshot = JSON.parse(await bridgeEval(page, "window.astraIntelligence.codingSnapshot().then(s=>JSON.stringify(s))"));
   record('B', 'plan names the file that will change', (snapshot.plan?.filesToChange ?? []).some((f) => f.includes('sum.js')), JSON.stringify(snapshot.plan?.filesToChange));
   let waitingPresentation;
-  const waitingDeadline = Date.now() + 2500;
+  // App polls the main task snapshot, then blends the previous clip out.
+  // Inspect the settled wait state instead of the single transition frame.
+  const waitingDeadline = Date.now() + 3500;
   do {
     waitingPresentation = JSON.parse(await bridgeEval(page, "(()=>{const v=document.querySelector('.world-viewport');return JSON.stringify({activity:v?.dataset.activity,clip:v?.astraDiagnostics?.clip})})()"));
-    if (waitingPresentation.activity === 'awaiting_approval') break;
+    if (waitingPresentation.activity === 'awaiting_approval' && waitingPresentation.clip !== 'desk_work') break;
     await new Promise((r) => setTimeout(r, 100));
   } while (Date.now() < waitingDeadline);
   record('LW03', 'pending approval is shown as waiting rather than executing', waitingPresentation.activity === 'awaiting_approval' && waitingPresentation.clip !== 'desk_work', JSON.stringify(waitingPresentation));

@@ -24,10 +24,14 @@ let intelligence: IntelligenceService;
 
 // Acceptance runs must never attach to Karl's personal memory or task DB.
 const acceptanceProfile = process.env.ASTRA_CA01_PROFILE;
+const acceptanceRepositoryRoot = process.env.ASTRA_ACCEPTANCE_REPOSITORY_ROOT;
 if (process.argv.includes('--ca01-acceptance') && acceptanceProfile) {
   const resolved = path.resolve(acceptanceProfile);
   if (!resolved.startsWith(path.resolve(os.tmpdir()) + path.sep)) throw new Error('CA-01 acceptance profile must be disposable and under TEMP');
   app.setPath('userData', resolved);
+}
+if (acceptanceRepositoryRoot && (!process.argv.includes('--ca01-acceptance') || !acceptanceProfile || !path.resolve(acceptanceRepositoryRoot).startsWith(path.resolve(os.tmpdir()) + path.sep))) {
+  throw new Error('Acceptance repository root requires an isolated acceptance profile and must stay under TEMP');
 }
 
 /**
@@ -178,7 +182,7 @@ void app.whenReady().then(async () => {
   const personality = await readFile(personalityPath, 'utf8').catch(() => '');
   // Chat is grounded in the knowledge base, so the service is created first and
   // its retrieval hook is handed to the conversation layer.
-  intelligence = new IntelligenceService({ databasePath: defaultDatabasePath() });
+  intelligence = new IntelligenceService({ databasePath: defaultDatabasePath(), ...(acceptanceRepositoryRoot ? { repositoryRoot: path.resolve(acceptanceRepositoryRoot) } : {}) });
   chat = new ChatService(personality, fetch, (query: string) => intelligence.groundQuery(query), intelligence.codingBridge, intelligence.chatMemoryPort());
   // Personal memory is loaded once at startup so the first reply of a session
   // already knows what Karl has told Astra, not only later ones.

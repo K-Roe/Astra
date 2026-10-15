@@ -220,6 +220,9 @@ export class CodingBridge {
    * approved separately.
    */
   private async startTask(intent: CodingIntent, message: string, cancellation?: AbortSignal): Promise<ChatToolResult> {
+    if (['investigating', 'planning', 'awaiting_approval', 'implementing', 'testing', 'reviewing'].includes(this.agent.snapshot().phase)) {
+      return { reply: 'A coding task is already in progress. Finish, reject or cancel it before starting another.', handled: true };
+    }
     const route = this.codingRoute();
     if (!route.permitted) return { reply: `Astra cannot delegate a code patch to the local coding model: ${route.reason}. Please inspect the repository manually or run a new coding benchmark.`, handled: true };
     // "Fix the bug in BrightSpeakAPI" names its repository, so honour it rather
@@ -259,11 +262,14 @@ export class CodingBridge {
       return { reply: 'This request touches Astra’s coding security boundary. It needs separate owner authorisation before Astra can propose an edit to those files.', handled: true };
     }
     let model;
+    this.agent.setInvestigatingProposal(true);
     try {
       model = await this.proposer(message.trim(), repository, proposedFiles, this.sandbox, fetch, cancellation);
     } catch (error) {
       if (cancellation?.aborted) throw error;
       return { reply: `I inspected the candidate files, but the coding model could not produce a validated patch: ${error instanceof Error ? error.message : String(error)}. Please narrow the task or give me the relevant file. No task was approved or changed.`, handled: true };
+    } finally {
+      this.agent.setInvestigatingProposal(false);
     }
     if (cancellation?.aborted) throw new Error('coding investigation cancelled');
 
@@ -327,6 +333,9 @@ export class CodingBridge {
   }
 
   private async proposeNewRepository(message: string): Promise<ChatToolResult> {
+    if (['investigating', 'planning', 'awaiting_approval', 'implementing', 'testing', 'reviewing'].includes(this.agent.snapshot().phase)) {
+      return { reply: 'A coding task is already in progress. Finish, reject or cancel it before starting another.', handled: true };
+    }
     const name = extractNewRepositoryName(message);
     if (!name) {
       return { reply: 'What should the new repository be called? For example: "create a React and TypeScript dashboard called MyDashboard".', handled: true };

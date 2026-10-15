@@ -1,5 +1,9 @@
 # Handover for the next AI agent
 
+## Conversational coding correction (2026-10-15)
+
+`codingIntent.ts` now catches “repo” creation language and trims sentence punctuation from new repository names. `CodingBridge` uses the existing CA-01 approval path without an existing repository selection; its proposal phase is exposed to `worldActivityFor` for read-only character presentation. `CharacterController` routes planning and approval waiting to the desk, keeps approval waiting in seated idle, and plays the rebuilt V1/V2 keyboard clip only during real approved coding or Learning work. The acceptance-only TEMP repository root override in main requires an isolated acceptance profile and flag. The exact AstraStone chat scenario is `scripts/acceptance-conversational-repository.mjs`; native screenshots are in `docs/review/conversational-coding/`. Keep V1 as fresh-profile default until Karl approves V2 visually. Do not push.
+
 ## Personal memory chat grounding correction (2026-10-15)
 
 Read the new top section of `docs/CURRENT_STATE.md`. The exact capability question is handled in `ChatService` before research/Gemma from `MemoryChatPort.summary()`; the same status is included in ordinary chat prompts. `buildGrounding` filters weak FTS5 OR results, and citation extraction checks the answer sentence against the selected passage. `docs/ASTRA_PERSONALITY.md` no longer says a fresh profile lacks the capability. Generated save/update/forget claims are guarded, while actual writes still require the trusted memory command path. Native acceptance uses V2 but does not approve it as a new default. Keep the existing database, bridge, coding controls and home intact. Verify Git status before further work and do not push automatically.

@@ -173,7 +173,7 @@ export const LivingWorldViewport = memo(function LivingWorldViewport({
       const diagnostics = controller?.getDiagnostics();
       const position = diagnostics?.position ?? { x: 0, z: 0 };
       let mode: HomeCameraMode = cameraChoiceRef.current === 'auto'
-        ? activityRef.current === 'coding' || activityRef.current === 'learning'
+        ? activityRef.current !== 'idle'
           ? 'desk'
           : diagnostics?.state === 'seated' && diagnostics.waypoint === 'sofa_seat' ? 'sofa' : 'companion'
         : cameraChoiceRef.current;

@@ -165,8 +165,8 @@ try {
     if (current.fps > 0) fpsSamples.push(current.fps);
     sawLearning ||= current.activity === 'learning';
     routed ||= current.activity === 'learning' && (current.destination === 'desk_seat' || current.waypoint === 'desk_seat');
-    // V1 has no `desk_work` clip, so seated work at the keyboard plays `thinking`;
-// V2 plays `desk_work`. Both are real seated work at the desk.
+    // Both current rigs have desk_work; retain the older fallback for assets
+    // that cannot expose that clip during a local recovery run.
 const SEATED_WORK = ['desk_work', 'thinking', 'seated_idle'];
 if (current.activity === 'learning' && current.waypoint === 'desk_seat' && SEATED_WORK.includes(current.clip)) {
       atDesk = true;
